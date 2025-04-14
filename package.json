@@ -1,0 +1,49 @@
+{
+  "name": "rxdb-premium-issues",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Repo to submit bug reports and test cases for the RxDB Premium Plugins",
+  "homepage": "https://github.com/pubkey/rxdb-premium-issues#readme",
+  "bugs": {
+    "url": "https://github.com/pubkey/rxdb-premium-issues/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pubkey/rxdb-premium-issues.git"
+  },
+  "author": "pubkey",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test:browser": "karma start",
+    "test:node": "mocha --expose-gc --config ./config/.mocharc.cjs ./bug-report.test.ts",
+    "test": "npm run test:node && npm run test:browser"
+  },
+  "dependencies": {
+    "@types/mocha": "10.0.10",
+    "get-port": "5.1.1",
+    "karma": "6.4.4",
+    "karma-babel-preprocessor": "8.0.2",
+    "karma-chrome-launcher": "3.2.0",
+    "karma-coverage": "2.2.1",
+    "karma-detect-browsers": "2.3.3",
+    "karma-firefox-launcher": "2.1.3",
+    "karma-ie-launcher": "1.0.0",
+    "karma-opera-launcher": "1.0.0",
+    "karma-safari-launcher": "1.0.0",
+    "karma-sourcemap-loader": "0.4.0",
+    "karma-spec-reporter": "0.0.36",
+    "karma-typescript": "5.5.4",
+    "karma-webpack": "5.0.1",
+    "process": "0.11.10",
+    "querystring-es3": "0.2.1",
+    "rxdb": "16.9.0",
+    "rxdb-premium": "16.9.0",
+    "ts-loader": "9.5.2",
+    "tsx": "4.19.3"
+  },
+  "devDependencies": {
+    "karma-mocha": "2.0.1",
+    "mocha": "11.1.0"
+  }
+}

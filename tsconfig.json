@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "target": "ES5",
+        "module": "commonjs",
+        "strict": true,
+        "outDir": "build",
+        "esModuleInterop": true,
+        "lib": ["ES2020", "ES2021.WeakRef"]
+    },
+    "include": [
+        "bug-report.test.ts"
+    ]
+}
