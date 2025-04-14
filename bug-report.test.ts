@@ -1,153 +1,114 @@
-/**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
- *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
- */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
 
-import {
-    createRxDatabase,
-    randomToken,
-    addRxPlugin
-} from 'rxdb/plugins/core';
+import { createRxDatabase, randomToken, addRxPlugin } from 'rxdb/plugins/core';
 
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
 import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
-
 import {
-    isNode
-} from 'rxdb/plugins/test-utils';
+	RxDBFlexSearchPlugin,
+	addFulltextSearch,
+} from 'rxdb-premium/plugins/flexsearch';
 
+import { isNode } from 'rxdb/plugins/test-utils';
 
-/**
- * You can import any RxDB Premium Plugins here
-*/
 import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-import { getRxStorageSQLite, getSQLiteBasicsNodeNative } from 'rxdb-premium/plugins/storage-sqlite';
+import {
+	getRxStorageSQLiteTrial,
+	getSQLiteBasicsNodeNative,
+} from 'rxdb/plugins/storage-sqlite';
+
+const mySchema = {
+	version: 0,
+	primaryKey: 'id',
+	type: 'object',
+	properties: {
+		id: {
+			type: 'string',
+			maxLength: 36,
+		},
+		title: {
+			type: 'string',
+		},
+	},
+};
 
 describe('bug-report.test.ts', () => {
+	addRxPlugin(RxDBFlexSearchPlugin);
+	addRxPlugin(RxDBDevModePlugin);
+	addRxPlugin(RxDBQueryBuilderPlugin);
 
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
+	it('fails because of full search plugin avj validation', async function () {
+		let storage: any;
 
-    it('should fail because it reproduces the bug', async function () {
+		if (isNode) {
+			const { DatabaseSync } = require('node:sqlite' + '');
+			storage = getRxStorageSQLiteTrial({
+				sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync),
+			});
+		} else {
+			storage = getRxStorageIndexedDB();
+		}
+		storage = wrappedValidateAjvStorage({
+			storage,
+		});
 
+		const name = randomToken(10);
 
-        let storage: any;
-        if (isNode) {
-            const { DatabaseSync } = require('node:sqlite' + '');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            storage = getRxStorageIndexedDB();
-        }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
+		// create a database
+		const db = await createRxDatabase({
+			name,
+			storage: storage,
+			eventReduce: true,
+			ignoreDuplicate: true,
+		});
 
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
-            }
-        };
+		// create a collection
+		const collections = await db.addCollections({
+			mycollection: {
+				schema: mySchema,
+			},
+		});
 
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
-        const name = randomToken(10);
+		// insert a document
+		await collections.mycollection.insert({
+			id: 'd7eaedeb-b3e4-411d-8edc-c62b6ec4a1aa',
+			title: 'title',
+		});
 
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
+		// insert a document
+		await collections.mycollection.insert({
+			id: 'g2eaeeee-b3e2-411d-8edc-c62b6ec4a1ab',
+			title: 'title',
+		});
 
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
+		const fullTextSearchInstance = await addFulltextSearch({
+			identifier: String(randomToken(10)),
+			collection: db.mycollection,
+			docToString: (doc) => doc.title,
+			initialization: 'instant',
+			indexOptions: {
+				charset: 'latin:advanced',
+				tokenize: 'forward',
+			},
+		});
 
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
+		/**
+		 * DELAY IS NEEDED,
+		 * FOR SOME REASON FLEX SEARCH PLUGIN
+		 * DOES NOT FIND ANY EVENTS WITHOUT THIS DELAY
+		 */
+		await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
+		/**
+		 * FAILING HERE
+		 */
+		const result = await fullTextSearchInstance.find('title', {
+			limit: Infinity,
+		});
 
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
+		assert.equal(result.length, 2);
 
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
-    });
+		db.close();
+	});
 });
