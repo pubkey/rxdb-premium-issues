@@ -45,7 +45,8 @@ jobs:
       - name: 'Create env file'
         run: |
           touch .env
-          echo API_KEY=${{ secrets.RXDB_PREMIUM }} >> .env
+          echo RXDB_PREMIUM=${{ secrets.RXDB_PREMIUM }} >> .env
+          cat .env
 
       - run: npm install
 
