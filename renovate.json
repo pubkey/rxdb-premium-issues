@@ -1,6 +1,18 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
-  ]
+    "config:base"
+  ],
+  "statusCheckVerify": true,
+  "ignoreDeps": [
+  ],
+  "automerge": true,
+  "major": {
+    "automerge": true
+  },
+  "ignorePaths": [
+  ],
+  "rebaseStalePrs": true,
+  "prConcurrentLimit": 8,
+  "prHourlyLimit": 2,
+  "dependencyDashboard": false
 }
