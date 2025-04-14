@@ -1,6 +1,6 @@
 # rxdb-premium-issues
 
-Repo to submit bug reports and test cases for the RxDB Premium Plugins
+Repo to submit bug reports and test cases for the [RxDB Premium Plugins](https://rxdb.info/premium/)
 
 ## How to use it
 
