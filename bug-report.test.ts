@@ -10,13 +10,12 @@ import {
 	addFulltextSearch,
 } from 'rxdb-premium/plugins/flexsearch';
 
-import { isNode } from 'rxdb/plugins/test-utils';
-
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
 import {
 	getRxStorageSQLiteTrial,
 	getSQLiteBasicsNodeNative,
 } from 'rxdb/plugins/storage-sqlite';
+
+import { wrappedKeyEncryptionCryptoJsStorage } from 'rxdb/plugins/encryption-crypto-js';
 
 const mySchema = {
 	version: 0,
@@ -25,12 +24,13 @@ const mySchema = {
 	properties: {
 		id: {
 			type: 'string',
-			maxLength: 36,
+			maxLength: 100,
 		},
 		title: {
 			type: 'string',
 		},
 	},
+	encrypted: ['title'],
 };
 
 describe('bug-report.test.ts', () => {
@@ -38,17 +38,14 @@ describe('bug-report.test.ts', () => {
 	addRxPlugin(RxDBDevModePlugin);
 	addRxPlugin(RxDBQueryBuilderPlugin);
 
-	it('fails because of full search plugin avj validation', async function () {
-		let storage: any;
-
-		if (isNode) {
-			const { DatabaseSync } = require('node:sqlite' + '');
-			storage = getRxStorageSQLiteTrial({
+	it('fails because of full search plugin in combination with encryption', async function () {
+		const { DatabaseSync } = require('node:sqlite' + '');
+		let storage = wrappedKeyEncryptionCryptoJsStorage({
+			storage: getRxStorageSQLiteTrial({
 				sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync),
-			});
-		} else {
-			storage = getRxStorageIndexedDB();
-		}
+			}),
+		});
+
 		storage = wrappedValidateAjvStorage({
 			storage,
 		});
@@ -61,6 +58,7 @@ describe('bug-report.test.ts', () => {
 			storage: storage,
 			eventReduce: true,
 			ignoreDuplicate: true,
+			password: 'testpasswordddd',
 		});
 
 		// create a collection
@@ -73,14 +71,24 @@ describe('bug-report.test.ts', () => {
 		// insert a document
 		await collections.mycollection.insert({
 			id: 'd7eaedeb-b3e4-411d-8edc-c62b6ec4a1aa',
-			title: 'title',
+			title: 'title-1',
 		});
 
 		// insert a document
 		await collections.mycollection.insert({
 			id: 'g2eaeeee-b3e2-411d-8edc-c62b6ec4a1ab',
-			title: 'title',
+			title: 'title-2',
 		});
+
+		const title1Result = await db.mycollection
+			.findOne({
+				selector: {
+					id: 'g2eaeeee-b3e2-411d-8edc-c62b6ec4a1ab',
+				},
+			})
+			.exec();
+
+		assert.equal(title1Result?.title, 'title-2');
 
 		const fullTextSearchInstance = await addFulltextSearch({
 			identifier: String(randomToken(10)),
@@ -93,16 +101,6 @@ describe('bug-report.test.ts', () => {
 			},
 		});
 
-		/**
-		 * DELAY IS NEEDED,
-		 * FOR SOME REASON FLEX SEARCH PLUGIN
-		 * DOES NOT FIND ANY EVENTS WITHOUT THIS DELAY
-		 */
-		await new Promise((resolve) => setTimeout(resolve, 2000));
-
-		/**
-		 * FAILING HERE
-		 */
 		const result = await fullTextSearchInstance.find('title', {
 			limit: Infinity,
 		});
