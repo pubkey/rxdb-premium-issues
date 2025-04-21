@@ -8,7 +8,8 @@
   "packageRules": [
     {
       "groupName": "rxdb-tangled-libs",
-      "matchPackageNames": ["rxdb", "rxdb-premium"]
+      "matchPackageNames": ["rxdb", "rxdb-premium"],
+      "automerge": true
     }
   ]
   "automerge": true,
