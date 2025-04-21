@@ -5,6 +5,12 @@
   "statusCheckVerify": true,
   "ignoreDeps": [
   ],
+  "packageRules": [
+    {
+      "groupName": "rxdb-tangled-libs",
+      "matchPackageNames": ["rxdb", "rxdb-premium"]
+    }
+  ]
   "automerge": true,
   "major": {
     "automerge": true
