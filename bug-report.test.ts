@@ -82,6 +82,18 @@ describe("bug-report.test.ts", () => {
         schema: mySchema,
       },
     });
+    await collections.mycollection.insert({
+      id: "a",
+      expiresAt: null,
+    });
+    await collections.mycollection.insert({
+      id: "b",
+      expiresAt: new Date(Date.now() + 100_000).toISOString(),
+    });
+    await collections.mycollection.insert({
+      id: "c",
+      expiresAt: new Date(Date.now() - 100_000).toISOString(),
+    });
 
     const found = await collections.mycollection
       .find({
@@ -91,9 +103,13 @@ describe("bug-report.test.ts", () => {
             { expiresAt: null },
           ],
         },
+        sort: [{ id: "asc" }],
       })
       .exec();
 
     assert.ok(Array.isArray(found));
+    assert.ok(found.length === 2);
+    assert.ok(found[0].id === "a");
+    assert.ok(found[1].id === "b");
   });
 });
