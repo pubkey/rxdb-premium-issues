@@ -37,8 +37,8 @@
     "karma-webpack": "5.0.1",
     "process": "0.11.10",
     "querystring-es3": "0.2.1",
-    "rxdb": "16.9.0",
-    "rxdb-premium": "16.9.0",
+    "rxdb": "16.17.2",
+    "rxdb-premium": "16.17.2",
     "ts-loader": "9.5.2",
     "tsx": "4.19.3"
   },
