@@ -32,6 +32,11 @@ import {
 import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
 import { getRxStorageSQLite, getSQLiteBasicsNodeNative } from 'rxdb-premium/plugins/storage-sqlite';
 
+import {
+  AfterMigrateBatchHandlerInput,
+  migrateStorage,
+} from "rxdb/plugins/migration-storage";
+
 describe('bug-report.test.ts', () => {
 
     addRxPlugin(RxDBDevModePlugin);
@@ -147,7 +152,30 @@ describe('bug-report.test.ts', () => {
 
         // clean up afterwards
         sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+        await db.close();
+        await dbInOtherTab.close();
+
+        const dbNew = await createRxDatabase({
+            name: name + "-new",
+            storage: storage,
+            eventReduce: true,
+            ignoreDuplicate: true,
+        });
+
+        let didProcessBatch = false;
+
+        await migrateStorage({
+            database: dbNew,
+            oldDatabaseName: name,
+            oldStorage: storage,
+            batchSize: 500,
+            parallel: false,
+            afterMigrateBatch: (input: AfterMigrateBatchHandlerInput) => {
+                console.info(`Migration batch processed: ${input}`);
+                didProcessBatch = true;
+            },
+        });
+
+        assert.strictEqual(didProcessBatch, true);
     });
 });
