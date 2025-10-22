@@ -44,7 +44,6 @@ describe('bug-report.test.ts', () => {
 
     it('should fail because it reproduces the bug', async function () {
 
-
         let storage: any;
         if (isNode) {
             const { DatabaseSync } = require('node:sqlite' + '');
