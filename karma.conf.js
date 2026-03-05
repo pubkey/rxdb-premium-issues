@@ -1,21 +1,44 @@
 // karma.conf.js
+const webpack = require('webpack');
+
 module.exports = function (config) {
     config.set({
         // The testing framework you'll be using
-        frameworks: ['mocha', 'karma-typescript'],
+        frameworks: ['mocha'],
 
         // Files/patterns to load into the browser
         files: [
-            { pattern: 'bug-report.test.ts' }
+            { pattern: 'bug-report.test.ts', watched: false }
         ],
 
-        // Preprocess the test file for TypeScript
+        // Preprocess the test file with webpack (bundles TypeScript + dependencies for the browser)
         preprocessors: {
-            'bug-report.test.ts': ['karma-typescript']
+            'bug-report.test.ts': ['webpack', 'sourcemap']
+        },
+
+        // webpack configuration for bundling the tests
+        webpack: {
+            mode: 'development',
+            devtool: 'inline-source-map',
+            resolve: {
+                extensions: ['.ts', '.tsx', '.js']
+            },
+            module: {
+                rules: [{
+                    test: /\.tsx?$/,
+                    use: 'ts-loader',
+                    exclude: /node_modules/
+                }]
+            },
+            plugins: [
+                new webpack.ProvidePlugin({
+                    process: 'process'
+                })
+            ]
         },
 
         // Report test results
-        reporters: ['progress', 'karma-typescript'],
+        reporters: ['progress'],
 
         // Custom launcher for headless Chrome (used in CI)
         customLaunchers: {
@@ -42,22 +65,6 @@ module.exports = function (config) {
             'karma-spec-reporter',
             'karma-sourcemap-loader'
         ],
-        // Configuration for karma-typescript
-        karmaTypescriptConfig: {
-            // This overrides/adds the specified compilerOptions to whatever is in tsconfig.json
-            compilerOptions: {
-                "target": "ES5",
-                "module": "commonjs",
-                strict: false,
-                skipLibCheck: true,
-                noEmitOnError: false,
-                "esModuleInterop": true,
-                "lib": ["ES2020", "ES2021.WeakRef"]
-            },
-            "include": [
-                "bug-report.test.ts"
-            ]
-        },
 
         // Exit after running tests once
         singleRun: true
