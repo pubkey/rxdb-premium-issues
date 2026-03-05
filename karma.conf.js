@@ -20,8 +20,31 @@ module.exports = function (config) {
         webpack: {
             mode: 'development',
             devtool: 'inline-source-map',
+            target: 'web',
             resolve: {
-                extensions: ['.ts', '.tsx', '.js']
+                extensions: ['.ts', '.tsx', '.js'],
+                fallback: {
+                    // polyfills used by rxdb and its deps in the browser
+                    events: require.resolve('events/'),
+                    process: require.resolve('process/browser'),
+                    querystring: require.resolve('querystring-es3'),
+                    // remaining Node.js built-ins: disable (not needed at runtime in browser)
+                    assert: false,
+                    buffer: false,
+                    crypto: false,
+                    fs: false,
+                    http: false,
+                    https: false,
+                    net: false,
+                    os: false,
+                    path: false,
+                    stream: false,
+                    tls: false,
+                    url: false,
+                    util: false,
+                    vm: false,
+                    zlib: false
+                }
             },
             module: {
                 rules: [{
@@ -31,6 +54,10 @@ module.exports = function (config) {
                 }]
             },
             plugins: [
+                // strip "node:" protocol prefix so webpack can resolve Node built-ins via fallback
+                new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+                    resource.request = resource.request.replace(/^node:/, '');
+                }),
                 new webpack.ProvidePlugin({
                     process: 'process'
                 })

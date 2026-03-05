@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@types/mocha": "10.0.10",
+    "events": "3.3.0",
     "get-port": "7.1.0",
     "karma": "6.4.4",
     "karma-babel-preprocessor": "8.0.2",
