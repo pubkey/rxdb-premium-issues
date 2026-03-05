@@ -1,4 +1,5 @@
 // karma.conf.js
+const path = require('path');
 const webpack = require('webpack');
 
 module.exports = function (config) {
@@ -23,6 +24,11 @@ module.exports = function (config) {
             target: 'web',
             resolve: {
                 extensions: ['.ts', '.tsx', '.js'],
+                alias: {
+                    // rxdb/plugins/test-utils is Node-only (reads DEFAULT_STORAGE env var etc.)
+                    // In the browser we just need isNode = false
+                    'rxdb/plugins/test-utils': path.resolve(__dirname, 'config/rxdb-test-utils-browser-stub.js')
+                },
                 fallback: {
                     // polyfills used by rxdb and its deps in the browser
                     events: require.resolve('events/'),
@@ -38,6 +44,9 @@ module.exports = function (config) {
                     net: false,
                     os: false,
                     path: false,
+                    // sqlite is a Node 22+ built-in; the test guards its use with isNode,
+                    // so webpack just needs an empty module for it in the browser bundle
+                    sqlite: false,
                     stream: false,
                     tls: false,
                     url: false,
