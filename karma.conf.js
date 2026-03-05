@@ -1,7 +1,7 @@
 // karma.conf.js
 module.exports = function (config) {
     config.set({
-        // The testing framework you’ll be using
+        // The testing framework you'll be using
         frameworks: ['mocha', 'karma-typescript'],
 
         // Files/patterns to load into the browser
@@ -17,8 +17,17 @@ module.exports = function (config) {
         // Report test results
         reporters: ['progress', 'karma-typescript'],
 
-        // Karma will run tests in this browser
-        browsers: ['Chrome'],
+        // Custom launcher for headless Chrome (used in CI)
+        customLaunchers: {
+            ChromeHeadlessCI: {
+                base: 'ChromeHeadless',
+                flags: ['--no-sandbox', '--disable-gpu']
+            }
+        },
+
+        // Use ChromeHeadlessCI in CI environments, Chrome locally
+        browsers: [process.env.CI ? 'ChromeHeadlessCI' : 'Chrome'],
+
         // Karma plugins loaded
         plugins: [
             'karma-mocha',
