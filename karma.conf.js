@@ -44,9 +44,6 @@ module.exports = function (config) {
                     net: false,
                     os: false,
                     path: false,
-                    // sqlite is a Node 22+ built-in; the test guards its use with isNode,
-                    // so webpack just needs an empty module for it in the browser bundle
-                    sqlite: false,
                     stream: false,
                     tls: false,
                     url: false,
