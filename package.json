@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@types/mocha": "10.0.10",
+    "events": "3.3.0",
     "get-port": "7.1.0",
     "karma": "6.4.4",
     "karma-babel-preprocessor": "8.0.2",
@@ -40,7 +41,8 @@
     "rxdb": "16.17.2",
     "rxdb-premium": "16.17.2",
     "ts-loader": "9.5.2",
-    "tsx": "4.19.3"
+    "tsx": "4.19.3",
+    "webpack": "5.99.0"
   },
   "devDependencies": {
     "karma-mocha": "2.0.1",

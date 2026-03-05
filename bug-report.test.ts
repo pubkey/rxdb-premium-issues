@@ -30,7 +30,6 @@ import {
  * You can import any RxDB Premium Plugins here
 */
 import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-import { getRxStorageSQLite, getSQLiteBasicsNodeNative } from 'rxdb-premium/plugins/storage-sqlite';
 
 describe('bug-report.test.ts', () => {
 
@@ -42,11 +41,15 @@ describe('bug-report.test.ts', () => {
 
         let storage: any;
         if (isNode) {
+            // SQLite is only available in Node.js; use dynamic require so the browser
+            // bundle never tries to include native Node-only dependencies.
             const { DatabaseSync } = require('node:sqlite' + '');
+            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
             storage = getRxStorageSQLite({
                 sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
             });
         } else {
+            // In the browser, use the premium IndexedDB storage.
             storage = getRxStorageIndexedDB();
         }
         storage = wrappedValidateAjvStorage({
