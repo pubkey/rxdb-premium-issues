@@ -1,11 +1,19 @@
 // karma.conf.js
 module.exports = function (config) {
     config.set({
-        // The testing framework you’ll be using
+        // The testing framework you'll be using
         frameworks: ['mocha', 'karma-typescript'],
 
         // Files/patterns to load into the browser
         files: [
+            // Worker script served (but not loaded) so it can be referenced by URL
+            { pattern: 'test/unit/wa-sqlite-worker.js', included: false, served: true, watched: false },
+            // wa-sqlite WASM build + source (needed by the worker)
+            { pattern: 'node_modules/wa-sqlite/dist/**/*', included: false, served: true, watched: false },
+            { pattern: 'node_modules/wa-sqlite/src/**/*.js', included: false, served: true, watched: false },
+            // Comlink ESM build (needed by the worker)
+            { pattern: 'node_modules/comlink/dist/esm/**/*', included: false, served: true, watched: false },
+            // Main test file (compiled by karma-typescript)
             { pattern: 'bug-report.test.ts' }
         ],
 
@@ -37,7 +45,7 @@ module.exports = function (config) {
         karmaTypescriptConfig: {
             // This overrides/adds the specified compilerOptions to whatever is in tsconfig.json
             compilerOptions: {
-                "target": "ES5",
+                "target": "ES2020",
                 "module": "commonjs",
                 strict: false,
                 skipLibCheck: true,
