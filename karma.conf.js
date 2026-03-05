@@ -9,6 +9,14 @@ module.exports = function (config) {
 
         // Files/patterns to load into the browser
         files: [
+            // Worker script served (but not loaded) so it can be referenced by URL
+            { pattern: 'test/unit/wa-sqlite-worker.js', included: false, served: true, watched: false },
+            // wa-sqlite WASM build + source (needed by the worker at runtime)
+            { pattern: 'node_modules/wa-sqlite/dist/**/*', included: false, served: true, watched: false },
+            { pattern: 'node_modules/wa-sqlite/src/**/*.js', included: false, served: true, watched: false },
+            // Comlink ESM build (needed by the worker at runtime)
+            { pattern: 'node_modules/comlink/dist/esm/**/*', included: false, served: true, watched: false },
+            // Main test file (bundled by webpack)
             { pattern: 'bug-report.test.ts', watched: false }
         ],
 
