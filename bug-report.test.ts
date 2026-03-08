@@ -9,7 +9,6 @@
  * - 'npm run test:browser' so it runs in the browser
  */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
 
 import {
     createRxDatabase,
@@ -36,8 +35,14 @@ describe('bug-report.test.ts', () => {
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
 
-    it('should fail because it reproduces the bug', async function () {
-
+    /**
+     * Reproduces https://github.com/pubkey/rxdb/issues/7984
+     *
+     * When performing bulkInsert on documents that were previously soft-deleted,
+     * only 199 documents are revived instead of all of them.
+     */
+    it('bulkInsert should revive all soft-deleted documents, not just 199', async function () {
+        this.timeout(60000);
 
         let storage: any;
         if (isNode) {
@@ -100,57 +105,73 @@ describe('bug-report.test.ts', () => {
             }
         });
 
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
+        const collection = collections.mycollection;
 
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
+        // Use 300 documents, well above the 199 limit described in the bug
+        const DOCUMENT_COUNT = 300;
+        const myDocuments = Array.from({ length: DOCUMENT_COUNT }, (_, i) => ({
+            passportId: 'doc-' + String(i).padStart(4, '0'),
+            firstName: 'First' + i,
+            lastName: 'Last' + i,
+            age: (i % 150) // keep age within schema maximum of 150
+        }));
 
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
+        // Step 1: Insert all N documents (should work correctly)
+        const firstInsertResult = await collection.bulkInsert(myDocuments);
+        assert.strictEqual(
+            firstInsertResult.success.length,
+            DOCUMENT_COUNT,
+            'First bulkInsert should report all documents as success'
+        );
+        assert.strictEqual(
+            firstInsertResult.error.length,
+            0,
+            'First bulkInsert should report no errors'
+        );
+        const countAfterFirstInsert = await collection.count().exec();
+        assert.strictEqual(
+            countAfterFirstInsert,
+            DOCUMENT_COUNT,
+            'After first bulkInsert, collection should contain all documents'
+        );
 
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
+        // Step 2: Delete all N documents
+        const allDocs = await collection.find().exec();
+        const bulkDeleteResult = await collection.bulkRemove(allDocs.map(d => d.passportId));
+        assert.strictEqual(
+            bulkDeleteResult.success.length,
+            DOCUMENT_COUNT,
+            'bulkRemove should report all documents as success'
+        );
+        const countAfterDelete = await collection.count().exec();
+        assert.strictEqual(
+            countAfterDelete,
+            0,
+            'After bulkRemove, collection should be empty'
+        );
 
+        // Step 3: Re-insert the same N documents (reviving soft-deleted entries)
+        const secondInsertResult = await collection.bulkInsert(myDocuments);
+        assert.strictEqual(
+            secondInsertResult.success.length,
+            DOCUMENT_COUNT,
+            'Second bulkInsert should report all documents as success'
+        );
+        assert.strictEqual(
+            secondInsertResult.error.length,
+            0,
+            'Second bulkInsert should report no errors'
+        );
 
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
+        // Step 4: Verify all documents are present (this is where the bug manifests)
+        const countAfterSecondInsert = await collection.count().exec();
+        assert.strictEqual(
+            countAfterSecondInsert,
+            DOCUMENT_COUNT,
+            'After second bulkInsert (reviving soft-deleted docs), collection should contain all ' + DOCUMENT_COUNT + ' documents, not just 199'
+        );
 
         // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+        await db.close();
     });
 });
