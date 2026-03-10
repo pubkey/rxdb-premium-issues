@@ -93,58 +93,26 @@ type TestCollections = {
     items: RxCollection<TestDocument>;
 };
 
-// ─── Random helpers (no external library needed) ─────────────────────────────
-
-/** Returns a random integer in [min, max] */
-function randInt(min: number, max: number): number {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-/** Returns a past ISO timestamp within the last `years` years */
-function randPastIso(years: number = 1): string {
-    const now = Date.now();
-    return new Date(now - Math.random() * years * 365 * 24 * 60 * 60 * 1000).toISOString();
-}
-
-/** Returns an ISO timestamp between `from` (ISO string) and `to` (Date) */
-function randBetweenIso(from: string, to: Date): string {
-    const start = new Date(from).getTime();
-    const end = to.getTime();
-    return new Date(start + Math.random() * (end - start)).toISOString();
-}
-
-/** Returns a future ISO timestamp within the next `years` years */
-function randFutureIso(years: number = 1): string {
-    return new Date(Date.now() + Math.random() * years * 365 * 24 * 60 * 60 * 1000).toISOString();
-}
-
 function generateRandomDocument(index: number): TestDocument {
-    const createdAt = randPastIso(1);
-    const updatedAt = randBetweenIso(createdAt, new Date());
-    const hasDueDate = Math.random() > 0.5;
-    const hasUserId = Math.random() > 0.5;
-    const hasLayer = Math.random() > 0.5;
-    const hasChecklist = Math.random() > 0.5;
-
     return {
         id: `test-${index}-${randomToken(12)}`,
         name: randomToken(10),
-        ticketNumber: randInt(1, 99999),
-        posX: Math.round(Math.random() * 100000) / 100,
-        posY: Math.round(Math.random() * 100000) / 100,
-        ticketTypeId: `type-${randInt(1, 10)}`,
+        ticketNumber: Math.floor(Math.random() * 99999) + 1,
+        posX: Math.random() * 1000,
+        posY: Math.random() * 1000,
+        ticketTypeId: randomToken(8),
         sortTicketTypeName: randomToken(8),
-        dueDate: hasDueDate ? randFutureIso(1) : null,
-        userId: hasUserId ? randomToken(12) : null,
+        dueDate: Math.random() > 0.5 ? randomToken(10) : null,
+        userId: Math.random() > 0.5 ? randomToken(12) : null,
         sortAssigneeName: randomToken(10),
-        layer: hasLayer ? `layer-${randInt(1, 5)}` : null,
-        checklistId: hasChecklist ? randomToken(12) : null,
-        checklistName: hasChecklist ? randomToken(10) : null,
-        projectId: `project-${randInt(1, 10)}`,
+        layer: Math.random() > 0.5 ? randomToken(8) : null,
+        checklistId: Math.random() > 0.5 ? randomToken(12) : null,
+        checklistName: Math.random() > 0.5 ? randomToken(10) : null,
+        projectId: `project-${Math.floor(Math.random() * 10) + 1}`,
         coupleId: randomToken(12),
-        statusId: `status-${randInt(1, 5)}`,
-        createdAt,
-        updatedAt,
+        statusId: `status-${Math.floor(Math.random() * 5) + 1}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         deletedAt: null,
         isBlocked: Math.random() < 0.1,
     };
