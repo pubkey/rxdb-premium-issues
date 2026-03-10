@@ -199,7 +199,7 @@ function runBulkUpsertTests(
             console.log(`Inserting ${DOCUMENT_COUNT} documents via bulkUpsert...`);
             const insertStart = performance.now();
             const insertResult = await collection.bulkUpsert(documents);
-            console.log(`Insert: ${(performance.now() - insertStart).toFixed(2)}ms, ${insertResult.length} docs`);
+            console.log(`Insert: ${(performance.now() - insertStart).toFixed(2)}ms, ${insertResult.success.length} docs`);
 
             const countAfterInsert = await collection.count().exec();
             assert.strictEqual(countAfterInsert, DOCUMENT_COUNT,
@@ -248,7 +248,7 @@ function runBulkUpsertTests(
             console.log(`Re-inserting ${updatedDocuments.length} documents via bulkUpsert...`);
             const updateStart = performance.now();
             const updateResult = await collection.bulkUpsert(updatedDocuments);
-            console.log(`Re-insert: ${(performance.now() - updateStart).toFixed(2)}ms, ${updateResult.length} docs`);
+            console.log(`Re-insert: ${(performance.now() - updateStart).toFixed(2)}ms, ${updateResult.success.length} docs`);
 
             const countAfterUpdate = await collection.count().exec();
             assert.strictEqual(countAfterUpdate, DOCUMENT_COUNT,
