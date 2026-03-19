@@ -1,20 +1,41 @@
 /**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
+ * Bug Report: wrappedKeyEncryptionWebCryptoStorage incompatible with
+ * getRxStorageOPFS when used inside a Worker.
  *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
+ * The documentation recommends running encryption inside workers:
+ * https://rxdb.info/encryption.html
+ *
+ *   "If you are using Worker RxStorage or SharedWorker RxStorage with
+ *    encryption, it's recommended to run encryption inside of the worker."
+ *
+ * However, wrapping getRxStorageOPFS() with
+ * wrappedKeyEncryptionWebCryptoStorage() inside a worker causes:
+ *
+ *   TypeError: findResult.map is not a function
+ *
+ * ROOT CAUSE:
+ * The OPFS storage (storage-abstract-filesystem/find-by-ids.ts)
+ * returns JSON strings from findDocumentsById() as an optimization.
+ * The encryption wrapper calls .map() on the result expecting an
+ * array. Strings don't have .map() -> TypeError.
+ *
+ * SUGGESTED FIX:
+ * The encryption wrapper should handle both formats:
+ *   const docs = typeof findResult === 'string'
+ *       ? JSON.parse(findResult) : findResult;
+ *   return docs.map(doc => decryptFields(doc));
+ *
+ * Worker files:
+ * - workers/opfs-with-encryption.ts: OPFS + encryption (FAILS)
+ * - workers/opfs-bare.ts: bare OPFS (used with main-thread encryption, WORKS)
  */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
 
 import {
     createRxDatabase,
     randomToken,
-    addRxPlugin
+    addRxPlugin,
+    type RxJsonSchema
 } from 'rxdb/plugins/core';
 
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
@@ -25,132 +46,125 @@ import {
     isNode
 } from 'rxdb/plugins/test-utils';
 
+import { setPremiumFlag } from 'rxdb-premium/plugins/shared';
+import { getRxStorageWorker } from 'rxdb-premium/plugins/storage-worker';
+import { wrappedKeyEncryptionWebCryptoStorage } from 'rxdb-premium/plugins/encryption-web-crypto';
 
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-
-describe('bug-report.test.ts', () => {
+describe('bug-report: OPFS encryption in worker', () => {
 
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
+    setPremiumFlag();
 
-    it('should fail because it reproduces the bug', async function () {
+    const schema: RxJsonSchema<any> = {
+        version: 0,
+        primaryKey: 'id',
+        type: 'object',
+        properties: {
+            id: { type: 'string', maxLength: 100 },
+            name: { type: 'string' },
+            secret: { type: 'string' }
+        },
+        required: ['id', 'name', 'secret'],
+        encrypted: ['secret']
+    };
 
+    const password = { algorithm: 'AES-GCM', password: 'myTestPasswordMinLength8' };
 
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
-        }
-        storage = wrappedValidateAjvStorage({
-            storage
+    /**
+     * FAILS: Encryption inside worker wrapping OPFS.
+     *
+     * Worker (workers/opfs-with-encryption.ts) does:
+     *   exposeWorkerRxStorage({
+     *       storage: wrappedKeyEncryptionWebCryptoStorage({
+     *           storage: getRxStorageOPFS()
+     *       })
+     *   });
+     *
+     * The encryption wrapper calls .map() on findDocumentsById result,
+     * but OPFS returns a JSON string -> TypeError.
+     */
+    it('FAILS: encryption inside worker wrapping OPFS', async function () {
+        if (isNode) return this.skip();
+        this.timeout(15000);
+
+        // Worker with OPFS + encryption inside (pre-built by webpack)
+        const storage = wrappedValidateAjvStorage({
+            storage: getRxStorageWorker({
+                workerInput: '/base/dist/opfs-with-encryption.js'
+            })
         });
 
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
-            }
-        };
-
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
         const name = randomToken(10);
-
-        // create a database
         const db = await createRxDatabase({
             name,
-            storage: storage,
+            storage,
+            password,
             eventReduce: true,
             ignoreDuplicate: true
         });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
+
+        await db.addCollections({ items: { schema } });
+
+        await db.items.insert({
+            id: 'test1',
+            name: 'Alice',
+            secret: 'my-secret-value'
         });
 
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
+        const doc = await db.items.findOne('test1').exec(true);
+        assert.strictEqual(doc.name, 'Alice');
+        assert.strictEqual(doc.secret, 'my-secret-value');
+
+        await db.close();
+    });
+
+    /**
+     * WORKS: Encryption on main thread wrapping the worker proxy.
+     *
+     * Worker (workers/opfs-bare.ts) does:
+     *   exposeWorkerRxStorage({ storage: getRxStorageOPFS() });
+     *
+     * Main thread wraps with encryption AFTER the worker proxy
+     * deserializes JSON strings back to arrays.
+     */
+    it('WORKS: encryption on main thread wrapping worker proxy', async function () {
+        if (isNode) return this.skip();
+        this.timeout(15000);
+
+        // Worker with bare OPFS (pre-built by webpack)
+        const workerStorage = getRxStorageWorker({
+            workerInput: '/base/dist/opfs-bare.js'
         });
 
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
+        // Encryption on main thread (workaround)
+        const storage = wrappedValidateAjvStorage({
+            storage: wrappedKeyEncryptionWebCryptoStorage({
+                storage: workerStorage
+            })
+        });
+
+        const name = randomToken(10);
+        const db = await createRxDatabase({
             name,
             storage,
+            password,
             eventReduce: true,
             ignoreDuplicate: true
         });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
+
+        await db.addCollections({ items: { schema } });
+
+        await db.items.insert({
+            id: 'test2',
+            name: 'Bob',
+            secret: 'another-secret'
         });
 
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
+        const doc = await db.items.findOne('test2').exec(true);
+        assert.strictEqual(doc.name, 'Bob');
+        assert.strictEqual(doc.secret, 'another-secret');
 
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+        await db.close();
     });
 });

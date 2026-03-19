@@ -9,7 +9,9 @@ module.exports = function (config) {
 
         // Files/patterns to load into the browser
         files: [
-            { pattern: 'bug-report.test.ts', watched: false }
+            { pattern: 'bug-report.test.ts', watched: false },
+            // Pre-built worker files (served but not included in page)
+            { pattern: 'dist/*.js', included: false, served: true, watched: false }
         ],
 
         // Preprocess the test file with webpack (bundles TypeScript + dependencies for the browser)
