@@ -15,7 +15,8 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "test:browser": "karma start",
+    "build:workers": "webpack --config webpack.workers.js",
+    "test:browser": "npm run build:workers && karma start",
     "test:node": "mocha --expose-gc --config ./config/.mocharc.cjs ./bug-report.test.ts",
     "test": "npm run test:node && npm run test:browser"
   },
@@ -38,14 +39,17 @@
     "karma-webpack": "5.0.1",
     "process": "0.11.10",
     "querystring-es3": "0.2.1",
-    "rxdb": "17.0.0-beta.9",
-    "rxdb-premium": "17.0.0-beta.9",
+    "rxdb": "16.21.1",
+    "rxdb-premium": "16.21.1",
+    "rxjs": "7.8.2",
     "ts-loader": "9.5.2",
     "tsx": "4.19.3",
     "webpack": "5.99.0"
   },
   "devDependencies": {
     "karma-mocha": "2.0.1",
-    "mocha": "11.1.0"
+    "mocha": "11.1.0",
+    "typescript": "5.9.3",
+    "webpack-cli": "7.0.2"
   }
 }
