@@ -16,7 +16,7 @@
   "main": "index.js",
   "scripts": {
     "test:browser": "karma start",
-    "test:node": "mocha --expose-gc --config ./config/.mocharc.cjs ./bug-report.test.ts",
+    "test:node": "NODE_OPTIONS='--experimental-sqlite' mocha --expose-gc --config ./config/.mocharc.cjs ./bug-report.test.ts",
     "test": "npm run test:node && npm run test:browser"
   },
   "dependencies": {
