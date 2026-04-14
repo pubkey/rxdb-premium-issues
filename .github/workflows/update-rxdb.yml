@@ -1,0 +1,52 @@
+name: Update RxDB Packages
+
+on:
+  repository_dispatch:
+    types: [update-rxdb]
+  workflow_dispatch:
+
+jobs:
+  update-rxdb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set node version
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Create env file
+        run: |
+          touch .env
+          echo RXDB_PREMIUM=${{ secrets.RXDB_PREMIUM }} >> .env
+
+      - name: Update rxdb, rxdb-server, and rxdb-premium
+        run: |
+          npm install rxdb@latest rxdb-server@latest rxdb-premium@latest
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet package.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: update rxdb, rxdb-server, and rxdb-premium to latest"
+          branch: automated/update-rxdb
+          title: "chore: update rxdb, rxdb-server, and rxdb-premium to latest"
+          body: |
+            Automated update of RxDB packages to their latest versions.
+
+            Triggered via `repository_dispatch` webhook.
+          delete-branch: true
