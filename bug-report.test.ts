@@ -17,6 +17,7 @@ import {
 } from 'rxdb/plugins/core';
 
 import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
+import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
 import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
 
 import {
@@ -58,8 +59,10 @@ describe('bug-report.test.ts', () => {
 
         const { DatabaseSync } = require('node:sqlite' + '');
         const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-        const storage = getRxStorageSQLite({
-            sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
+        const storage = wrappedValidateAjvStorage({
+            storage: getRxStorageSQLite({
+                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
+            })
         });
 
         const mySchema = {
