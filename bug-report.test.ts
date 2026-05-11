@@ -28,6 +28,7 @@ import {
 
 describe('bug-report.test.ts', () => {
     const SHARED_WORKER_HEALTH_CHECK_WAIT_MS = 2000;
+    // Browser/Karma mocha timeout defaults are too low for this multi-instance SharedWorker repro flow.
     const SHARED_WORKER_REPRO_TEST_TIMEOUT_MS = 30000;
 
     addRxPlugin(RxDBDevModePlugin);
