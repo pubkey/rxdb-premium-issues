@@ -39,22 +39,26 @@ describe('bug-report.test.ts', () => {
     it('should fail because it reproduces the bug', async function () {
 
 
-        let storage: any;
         if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
+            return;
         }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
+
+        const unhandledErrors: any[] = [];
+        const unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
+            const reasonAsString = event?.reason ? String(event.reason) : '';
+            if (reasonAsString.includes('TransactionInactiveError')) {
+                unhandledErrors.push({
+                    type: 'unhandledrejection',
+                    reason: reasonAsString
+                });
+            }
+        };
+        window.addEventListener('unhandledrejection', unhandledRejectionHandler);
+
+        let storage: any = getRxStorageIndexedDB({
+            sharedWorker: true
+        } as any);
+        storage = wrappedValidateAjvStorage({ storage });
 
         // create a schema
         const mySchema = {
@@ -84,73 +88,57 @@ describe('bug-report.test.ts', () => {
          * Always generate a random database-name
          * to ensure that different test runs do not affect each other.
          */
-        const name = randomToken(10);
-
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
+        const dbName = 'shared-worker-' + randomToken(10);
+        const db1 = await createRxDatabase({
+            name: dbName,
             storage,
             eventReduce: true,
-            ignoreDuplicate: true
+            ignoreDuplicate: true,
+            multiInstance: true
         });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
+        const db2 = await createRxDatabase({
+            name: dbName,
+            storage,
+            eventReduce: true,
+            ignoreDuplicate: true,
+            multiInstance: true
+        });
+
+        const collections1 = await db1.addCollections({
+            mycollection: {
+                schema: mySchema
+            }
+        });
+        const collections2 = await db2.addCollections({
             mycollection: {
                 schema: mySchema
             }
         });
 
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
         const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
+        const sub = collections2.mycollection.findOne('doc-0').$.subscribe(doc => emitted.push(doc));
 
-        // clean up afterwards
+        for (let i = 0; i < 25; i++) {
+            await collections1.mycollection.upsert({
+                passportId: 'doc-' + i,
+                firstName: 'Bob',
+                lastName: 'Kelso',
+                age: i
+            });
+            await collections2.mycollection.findOne('doc-' + i).exec();
+        }
+
+        await AsyncTestUtil.wait(2000);
+
         sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+        await db1.close();
+        await db2.close();
+        window.removeEventListener('unhandledrejection', unhandledRejectionHandler);
+
+        assert.strictEqual(
+            unhandledErrors.length,
+            0,
+            'Expected no SharedWorker/IndexedDB unhandled rejections, got: ' + JSON.stringify(unhandledErrors)
+        );
     });
 });
