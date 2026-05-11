@@ -85,7 +85,7 @@ describe('bug-report.test.ts', () => {
          * Always generate a random database-name
          * to ensure that different test runs do not affect each other.
          */
-        const dbName = 'shared-worker-' + randomToken(10);
+        const dbName = 'shared-worker-test-' + randomToken(10);
         const db1 = await createRxDatabase({
             name: dbName,
             storage,
@@ -125,8 +125,8 @@ describe('bug-report.test.ts', () => {
             await collections2.mycollection.findOne('doc-' + i).exec();
         }
 
-        const healthCheckWindowMs = 2000;
-        await AsyncTestUtil.wait(healthCheckWindowMs);
+        const sharedWorkerHealthCheckWaitMs = 2000;
+        await AsyncTestUtil.wait(sharedWorkerHealthCheckWaitMs);
 
         sub.unsubscribe();
         await db1.close();
