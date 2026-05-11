@@ -26,17 +26,12 @@ import {
 } from 'rxdb/plugins/test-utils';
 
 
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-
 describe('bug-report.test.ts', () => {
 
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
 
-    it('should fail because it reproduces the bug', async function () {
+    it('should not emit SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
 
 
         if (isNode) {
@@ -44,7 +39,7 @@ describe('bug-report.test.ts', () => {
         }
 
         const unhandledErrors: any[] = [];
-        const unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
+        const unhandledRejectionHandler = (event: any) => {
             const reasonAsString = event?.reason ? String(event.reason) : '';
             if (reasonAsString.includes('TransactionInactiveError')) {
                 unhandledErrors.push({
@@ -55,10 +50,12 @@ describe('bug-report.test.ts', () => {
         };
         window.addEventListener('unhandledrejection', unhandledRejectionHandler);
 
-        let storage: any = getRxStorageIndexedDB({
-            sharedWorker: true
-        } as any);
-        storage = wrappedValidateAjvStorage({ storage });
+        const { getRxStorageSharedWorker } = await import('rxdb-premium/plugins/storage-worker');
+        const storage = wrappedValidateAjvStorage({
+            storage: getRxStorageSharedWorker({
+                workerInput: '/base/node_modules/rxdb-premium/dist/workers/indexeddb.worker.js'
+            })
+        });
 
         // create a schema
         const mySchema = {
