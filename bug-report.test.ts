@@ -28,12 +28,13 @@ import {
 
 describe('bug-report.test.ts', () => {
     const SHARED_WORKER_HEALTH_CHECK_WAIT_MS = 2000;
+    const SHARED_WORKER_REPRO_TEST_TIMEOUT_MS = 30000;
 
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
 
     it('reproduces SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
-        this.timeout(30000);
+        this.timeout(SHARED_WORKER_REPRO_TEST_TIMEOUT_MS);
 
 
         if (isNode) {
