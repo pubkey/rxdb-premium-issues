@@ -31,7 +31,7 @@ describe('bug-report.test.ts', () => {
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
 
-    it('should not emit SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
+    it('reproduces SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
 
 
         if (isNode) {
@@ -125,7 +125,8 @@ describe('bug-report.test.ts', () => {
             await collections2.mycollection.findOne('doc-' + i).exec();
         }
 
-        await AsyncTestUtil.wait(2000);
+        const healthCheckWindowMs = 2000;
+        await AsyncTestUtil.wait(healthCheckWindowMs);
 
         sub.unsubscribe();
         await db1.close();
