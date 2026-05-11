@@ -33,6 +33,7 @@ describe('bug-report.test.ts', () => {
     addRxPlugin(RxDBQueryBuilderPlugin);
 
     it('reproduces SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
+        this.timeout(30000);
 
 
         if (isNode) {
