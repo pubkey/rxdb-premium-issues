@@ -28,14 +28,14 @@ import {
 
 describe('bug-report.test.ts', () => {
     const SHARED_WORKER_HEALTH_CHECK_WAIT_MS = 2000;
-    // Browser/Karma mocha timeout defaults are too low for this multi-instance SharedWorker repro flow.
-    const SHARED_WORKER_REPRO_TEST_TIMEOUT_MS = 30000;
+    // Allow enough time for browser startup + two DB instances + repeated writes/reads + health-check wait.
+    const SHARED_WORKER_REPRODUCTION_TEST_TIMEOUT_MS = 30000;
 
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
 
     it('reproduces SharedWorker TransactionInactiveError with IndexedDB storage', async function () {
-        this.timeout(SHARED_WORKER_REPRO_TEST_TIMEOUT_MS);
+        this.timeout(SHARED_WORKER_REPRODUCTION_TEST_TIMEOUT_MS);
 
 
         if (isNode) {
