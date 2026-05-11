@@ -27,6 +27,7 @@ import {
 
 
 describe('bug-report.test.ts', () => {
+    const SHARED_WORKER_HEALTH_CHECK_WAIT_MS = 2000;
 
     addRxPlugin(RxDBDevModePlugin);
     addRxPlugin(RxDBQueryBuilderPlugin);
@@ -85,7 +86,7 @@ describe('bug-report.test.ts', () => {
          * Always generate a random database-name
          * to ensure that different test runs do not affect each other.
          */
-        const dbName = 'shared-worker-test-' + randomToken(10);
+        const dbName = `shared-worker-test-${randomToken(10)}`;
         const db1 = await createRxDatabase({
             name: dbName,
             storage,
@@ -125,8 +126,7 @@ describe('bug-report.test.ts', () => {
             await collections2.mycollection.findOne('doc-' + i).exec();
         }
 
-        const sharedWorkerHealthCheckWaitMs = 2000;
-        await AsyncTestUtil.wait(sharedWorkerHealthCheckWaitMs);
+        await AsyncTestUtil.wait(SHARED_WORKER_HEALTH_CHECK_WAIT_MS);
 
         sub.unsubscribe();
         await db1.close();
