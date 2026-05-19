@@ -14,6 +14,31 @@ declare const window: any;
 
 addRxPlugin(RxDBDevModePlugin);
 
+const REPLICATION_SCHEMA = {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+        id: {
+            type: 'string',
+            maxLength: 100
+        },
+        value: {
+            type: 'string'
+        },
+        updatedAt: {
+            type: 'number',
+            minimum: 0,
+            maximum: 9999999999999
+        },
+        _deleted: {
+            type: 'boolean'
+        }
+    },
+    required: ['id', 'value', 'updatedAt', '_deleted']
+};
+const WAIT_FOR_UNHANDLED_MS = 10 * 1000;
+
 describe('bug-report.test.ts', () => {
     it('reproduces TransactionInactiveError via RxDB replication with IndexedDB storage', async function () {
         if (isNode) {
@@ -27,40 +52,17 @@ describe('bug-report.test.ts', () => {
             storage: getRxStorageIndexedDB()
         });
         const dbName = 'issue-8497-' + randomToken(10);
-        const schema = {
-            version: 0,
-            primaryKey: 'id',
-            type: 'object',
-            properties: {
-                id: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                value: {
-                    type: 'string'
-                },
-                updatedAt: {
-                    type: 'number',
-                    minimum: 0,
-                    maximum: 9999999999999
-                },
-                _deleted: {
-                    type: 'boolean'
-                }
-            },
-            required: ['id', 'value', 'updatedAt', '_deleted']
-        };
         const docsFromMaster = Array.from({ length: 500 }).map((_, idx) => ({
             id: 'doc-' + idx,
             value: 'v' + idx,
             updatedAt: idx,
             _deleted: false
         }));
-        const unhandled: any[] = [];
+        const unhandledRejections: any[] = [];
         const onUnhandled = (event: any) => {
             const reasonAsString = String(event.reason);
             if (reasonAsString.includes('TransactionInactiveError') && reasonAsString.includes('IDBObjectStore')) {
-                unhandled.push(event.reason);
+                unhandledRejections.push(event.reason);
             }
         };
         window.addEventListener('unhandledrejection', onUnhandled);
@@ -76,7 +78,7 @@ describe('bug-report.test.ts', () => {
         try {
             const collections = await db.addCollections({
                 docs: {
-                    schema
+                    schema: REPLICATION_SCHEMA
                 }
             });
             const replicationState = replicateRxCollection({
@@ -100,9 +102,9 @@ describe('bug-report.test.ts', () => {
             });
 
             await replicationState.awaitInSync();
-            await AsyncTestUtil.waitUntil(() => unhandled.length > 0, 10 * 1000);
+            await AsyncTestUtil.waitUntil(() => unhandledRejections.length > 0, WAIT_FOR_UNHANDLED_MS);
 
-            const firstError = String(unhandled[0]);
+            const firstError = String(unhandledRejections[0]);
             if (!firstError.includes(exactMessage)) {
                 throw new Error('Unexpected error: ' + firstError);
             }
