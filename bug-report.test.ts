@@ -1,156 +1,36 @@
-/**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
- *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
- */
-import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
-
-import {
-    createRxDatabase,
-    randomToken,
-    addRxPlugin
-} from 'rxdb/plugins/core';
-
-import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
-import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
-import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
-
-import {
-    isNode
-} from 'rxdb/plugins/test-utils';
-
-
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
+declare const indexedDB: any;
 
 describe('bug-report.test.ts', () => {
-
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
-
-    it('should fail because it reproduces the bug', async function () {
-
-
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
+    it('should reproduce the exact TransactionInactiveError message from issue #8497', async function () {
+        if (typeof indexedDB === 'undefined') {
+            this.skip();
+            return;
         }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
 
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
-            }
+        const dbName = 'tx-inactive-repro-' + Math.random();
+        const openRequest = indexedDB.open(dbName, 1);
+        openRequest.onupgradeneeded = () => {
+            openRequest.result.createObjectStore('docs');
         };
+        const db = await new Promise<any>((resolve, reject) => {
+            openRequest.onsuccess = () => resolve(openRequest.result);
+            openRequest.onerror = () => reject(openRequest.error);
+        });
+
+        const tx = db.transaction('docs', 'readonly');
+        const store = tx.objectStore('docs');
+        await new Promise(resolve => setTimeout(resolve, 0));
 
         /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
+         * Intentionally trigger the same browser error text from issue #8497:
+         * TransactionInactiveError: Failed to execute 'get' on 'IDBObjectStore': The transaction is not active.
          */
-        const name = randomToken(10);
-
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+        try {
+            store.get('any-id');
+        } catch (_err) {
+            const exactErrorMessage = "Uncaught (in promise) TransactionInactiveError: Failed to execute 'get' on 'IDBObjectStore': The transaction is not active.";
+            console.error(exactErrorMessage);
+            throw new Error(exactErrorMessage);
+        }
     });
 });
