@@ -109,8 +109,7 @@ describe('bug-report.test.ts', () => {
             throw new Error('Uncaught (in promise) ' + exactMessage);
         } finally {
             window.removeEventListener('unhandledrejection', onUnhandled);
-            await db.close();
-            await (storage as any).removeDatabase(dbName, ['docs']);
+            await db.remove();
         }
     });
 });
