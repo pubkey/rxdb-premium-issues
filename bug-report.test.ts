@@ -36,6 +36,7 @@ type PersonDoc = {
     name: string;
     age: number;
 };
+const QUERY_TIMEOUT_MS = 10 * 1000;
 
 describe('bug-report.test.ts', () => {
 
@@ -236,11 +237,11 @@ describe('bug-report.test.ts', () => {
             index: ['name', 'age']
         }).exec();
 
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), 10 * 1000);
+        const timeoutPromise: Promise<never> = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
         });
 
-        const result = await Promise.race([queryPromise, timeoutPromise]) as PersonDoc[];
+        const result = await Promise.race<PersonDoc[] | never>([queryPromise, timeoutPromise]);
         assert.strictEqual(result.length, 50);
         result.forEach(doc => {
             assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
