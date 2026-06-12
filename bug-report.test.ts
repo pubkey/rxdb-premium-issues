@@ -241,7 +241,7 @@ describe('bug-report.test.ts', () => {
             setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
         });
 
-        const result = await Promise.race<PersonDoc[] | never>([queryPromise, timeoutPromise]);
+        const result = await Promise.race<PersonDoc[]>([queryPromise, timeoutPromise]);
         assert.strictEqual(result.length, 50);
         result.forEach(doc => {
             assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
