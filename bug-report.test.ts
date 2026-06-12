@@ -216,7 +216,7 @@ describe('bug-report.test.ts', () => {
         const collection = collections.people;
 
         const names = ['aaron', 'jack', 'carol', 'zoe'];
-        const docs: PersonDoc[] = new Array(15000).fill(0).map((_, idx) => ({
+        const docs: PersonDoc[] = Array.from({ length: 15000 }, (_, idx) => ({
             id: 'id-' + idx,
             name: names[idx % names.length],
             age: idx % 100
@@ -237,11 +237,15 @@ describe('bug-report.test.ts', () => {
             index: ['name', 'age']
         }).exec();
 
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise: Promise<never> = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
+            timeoutId = setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
         });
 
-        const result = await Promise.race<PersonDoc[]>([queryPromise, timeoutPromise]);
+        const result = await Promise.race([queryPromise, timeoutPromise]);
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
         assert.strictEqual(result.length, 50);
         result.forEach(doc => {
             assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
