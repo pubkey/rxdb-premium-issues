@@ -153,4 +153,96 @@ describe('bug-report.test.ts', () => {
         db.close();
         dbInOtherTab.close();
     });
+
+    it('issue #8631: sqlite $in query should work with explicit index + sort', async function () {
+        if (!isNode) {
+            return;
+        }
+
+        const { DatabaseSync } = require('node:sqlite' + '');
+        const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
+
+        let storage: any = getRxStorageSQLite({
+            sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
+        });
+        storage = wrappedValidateAjvStorage({
+            storage
+        });
+
+        const db = await createRxDatabase({
+            name: randomToken(10),
+            storage,
+            eventReduce: true,
+            ignoreDuplicate: true
+        });
+
+        const schema = {
+            version: 0,
+            type: 'object',
+            primaryKey: 'id',
+            properties: {
+                id: {
+                    type: 'string',
+                    maxLength: 100
+                },
+                name: {
+                    type: 'string'
+                },
+                age: {
+                    type: 'integer',
+                    minimum: 0,
+                    maximum: 200
+                }
+            },
+            required: ['id', 'name', 'age'],
+            indexes: [
+                ['name', 'age']
+            ]
+        };
+
+        const collections = await db.addCollections({
+            people: {
+                schema
+            }
+        });
+        const collection = collections.people;
+
+        const names = ['aaron', 'jack', 'carol', 'zoe'];
+        const docs = new Array(15000).fill(0).map((_, idx) => ({
+            id: 'id-' + idx,
+            name: names[idx % names.length],
+            age: idx % 100
+        }));
+        await collection.bulkInsert(docs);
+
+        const queryPromise = collection.find({
+            selector: {
+                name: {
+                    $in: ['aaron', 'jack', 'carol']
+                },
+                age: {
+                    $lt: 5
+                }
+            },
+            sort: [{ age: 'desc' }],
+            limit: 50,
+            index: ['name', 'age']
+        }).exec();
+
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), 10 * 1000);
+        });
+
+        const result: any[] = await Promise.race([queryPromise, timeoutPromise]) as any[];
+        assert.strictEqual(result.length, 50);
+        result.forEach(doc => {
+            assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
+            assert.ok(doc.age < 5);
+        });
+        for (let i = 1; i < result.length; i++) {
+            assert.ok(result[i - 1].age >= result[i].age);
+        }
+
+        await db.close();
+    });
 });
