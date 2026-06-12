@@ -194,7 +194,8 @@ describe('bug-report.test.ts', () => {
                     maxLength: 100
                 },
                 name: {
-                    type: 'string'
+                    type: 'string',
+                    maxLength: 100
                 },
                 age: {
                     type: 'integer',
