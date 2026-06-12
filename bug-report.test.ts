@@ -31,6 +31,12 @@ import {
 */
 import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
 
+type PersonDoc = {
+    id: string;
+    name: string;
+    age: number;
+};
+
 describe('bug-report.test.ts', () => {
 
     addRxPlugin(RxDBDevModePlugin);
@@ -159,10 +165,11 @@ describe('bug-report.test.ts', () => {
             return;
         }
 
-        const { DatabaseSync } = require('node:sqlite' + '');
+        // Keep this dynamic require so browser bundling never resolves node:sqlite.
+        const { DatabaseSync } = require('node:sqlite');
         const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
 
-        let storage: any = getRxStorageSQLite({
+        let storage = getRxStorageSQLite({
             sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
         });
         storage = wrappedValidateAjvStorage({
@@ -208,7 +215,7 @@ describe('bug-report.test.ts', () => {
         const collection = collections.people;
 
         const names = ['aaron', 'jack', 'carol', 'zoe'];
-        const docs = new Array(15000).fill(0).map((_, idx) => ({
+        const docs: PersonDoc[] = new Array(15000).fill(0).map((_, idx) => ({
             id: 'id-' + idx,
             name: names[idx % names.length],
             age: idx % 100
@@ -233,7 +240,7 @@ describe('bug-report.test.ts', () => {
             setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), 10 * 1000);
         });
 
-        const result: any[] = await Promise.race([queryPromise, timeoutPromise]) as any[];
+        const result = await Promise.race([queryPromise, timeoutPromise]) as PersonDoc[];
         assert.strictEqual(result.length, 50);
         result.forEach(doc => {
             assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
