@@ -242,9 +242,13 @@ describe('bug-report.test.ts', () => {
             timeoutId = setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
         });
 
-        const result = await Promise.race([queryPromise, timeoutPromise]);
-        if (timeoutId) {
-            clearTimeout(timeoutId);
+        let result: PersonDoc[];
+        try {
+            result = await Promise.race([queryPromise, timeoutPromise]);
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
         }
         assert.strictEqual(result.length, 50);
         result.forEach(doc => {
