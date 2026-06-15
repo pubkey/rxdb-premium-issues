@@ -180,7 +180,7 @@ describe('bug-report.test.ts', () => {
                 return;
             }
             if (Array.isArray(value)) {
-                value.forEach(captureQueries);
+                value.forEach(innerValue => captureQueries(innerValue, visitedValues));
                 return;
             }
             if (typeof value === 'object') {
@@ -289,9 +289,9 @@ describe('bug-report.test.ts', () => {
             assert.ok(result[i - 1].age >= result[i].age);
         }
 
-        const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query => /(?=.*\bpeople-0\b)(?=.*\bINDEXED\s+BY\b)(?=.*\bORDER\s+BY\b)/s.test(query));
+        const explicitIndexQuery = sqliteQueries.find(query => /(?=.*\bpeople-0\b)(?=.*\bINDEXED\s+BY\b)(?=.*\bORDER\s+BY\b)/s.test(query));
         assert.ok(
-            sqliteQueryUsingExplicitIndex,
+            explicitIndexQuery,
             'Expected logged sqlite query to use explicit index via INDEXED BY'
         );
 
