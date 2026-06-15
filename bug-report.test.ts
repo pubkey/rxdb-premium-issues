@@ -238,7 +238,7 @@ describe('bug-report.test.ts', () => {
             limit: 50,
             index: ['name', 'age']
         });
-        const preparedQuery = (rxQuery as any).getPreparedQuery();
+        const preparedQuery = rxQuery.getPreparedQuery();
         assert.deepStrictEqual(preparedQuery.queryPlan.index, ['name', 'age']);
         assert.strictEqual(preparedQuery.queryPlan.selectorSatisfiedByIndex, true);
 
