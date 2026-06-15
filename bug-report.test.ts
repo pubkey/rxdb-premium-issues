@@ -193,6 +193,7 @@ describe('bug-report.test.ts', () => {
                 if (typeof asAny.query === 'string') {
                     sqliteQueries.push(asAny.query);
                 }
+                Object.values(value).forEach(captureQueries);
             }
         };
 
@@ -290,7 +291,7 @@ describe('bug-report.test.ts', () => {
         }
 
         const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query =>
-            /"\s*people-0\s*"/.test(query) &&
+            /\bpeople-0\b/.test(query) &&
             /\bINDEXED\s+BY\b/.test(query) &&
             /\bORDER\s+BY\b/.test(query)
         );
