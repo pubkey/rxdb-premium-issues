@@ -171,9 +171,8 @@ describe('bug-report.test.ts', () => {
         const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
 
         const sqliteQueries: string[] = [];
-        const visitedValues = new Set<object>();
-        const captureQueries = (value: unknown) => {
-            if (!value) {
+        const captureQueries = (value: unknown, visitedValues = new Set<object>()) => {
+            if (value === null || value === undefined) {
                 return;
             }
             if (typeof value === 'string') {
@@ -193,7 +192,7 @@ describe('bug-report.test.ts', () => {
                 if (typeof asAny.query === 'string') {
                     sqliteQueries.push(asAny.query);
                 }
-                Object.values(value).forEach(captureQueries);
+                Object.values(value).forEach(innerValue => captureQueries(innerValue, visitedValues));
             }
         };
 
@@ -290,11 +289,7 @@ describe('bug-report.test.ts', () => {
             assert.ok(result[i - 1].age >= result[i].age);
         }
 
-        const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query =>
-            /\bpeople-0\b/.test(query) &&
-            /\bINDEXED\s+BY\b/.test(query) &&
-            /\bORDER\s+BY\b/.test(query)
-        );
+        const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query => /(?=.*\bpeople-0\b)(?=.*\bINDEXED\s+BY\b)(?=.*\bORDER\s+BY\b)/s.test(query));
         assert.ok(
             sqliteQueryUsingExplicitIndex,
             'Expected logged sqlite query to use explicit index via INDEXED BY'
