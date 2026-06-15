@@ -200,7 +200,8 @@ describe('bug-report.test.ts', () => {
                 age: {
                     type: 'integer',
                     minimum: 0,
-                    maximum: 200
+                    maximum: 200,
+                    multipleOf: 1
                 }
             },
             required: ['id', 'name', 'age'],
