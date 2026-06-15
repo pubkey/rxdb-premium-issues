@@ -225,7 +225,7 @@ describe('bug-report.test.ts', () => {
         }));
         await collection.bulkInsert(docs);
 
-        const queryPromise = collection.find({
+        const rxQuery = collection.find({
             selector: {
                 name: {
                     $in: ['aaron', 'jack', 'carol']
@@ -237,7 +237,12 @@ describe('bug-report.test.ts', () => {
             sort: [{ age: 'desc' }],
             limit: 50,
             index: ['name', 'age']
-        }).exec();
+        });
+        const preparedQuery = (rxQuery as any).getPreparedQuery();
+        assert.deepStrictEqual(preparedQuery.queryPlan.index, ['name', 'age']);
+        assert.strictEqual(preparedQuery.queryPlan.selectorSatisfiedByIndex, true);
+
+        const queryPromise = rxQuery.exec();
 
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise: Promise<never> = new Promise((_, reject) => {
