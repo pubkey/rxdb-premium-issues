@@ -170,8 +170,30 @@ describe('bug-report.test.ts', () => {
         const { DatabaseSync } = require('node:sqlite');
         const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
 
+        const sqliteQueries: string[] = [];
+        const captureQueries = (value: unknown) => {
+            if (!value) {
+                return;
+            }
+            if (typeof value === 'string') {
+                sqliteQueries.push(value);
+                return;
+            }
+            if (Array.isArray(value)) {
+                value.forEach(captureQueries);
+                return;
+            }
+            if (typeof value === 'object') {
+                const asAny = value as { query?: string };
+                if (typeof asAny.query === 'string') {
+                    sqliteQueries.push(asAny.query);
+                }
+            }
+        };
+
         let storage = getRxStorageSQLite({
-            sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
+            sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync),
+            log: (...args: unknown[]) => args.forEach(captureQueries)
         });
         storage = wrappedValidateAjvStorage({
             storage
@@ -238,10 +260,6 @@ describe('bug-report.test.ts', () => {
             limit: 50,
             index: ['name', 'age']
         });
-        const preparedQuery = rxQuery.getPreparedQuery();
-        assert.deepStrictEqual(preparedQuery.queryPlan.index, ['name', 'age']);
-        assert.strictEqual(preparedQuery.queryPlan.selectorSatisfiedByIndex, true);
-
         const queryPromise = rxQuery.exec();
 
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -265,6 +283,16 @@ describe('bug-report.test.ts', () => {
         for (let i = 1; i < result.length; i++) {
             assert.ok(result[i - 1].age >= result[i].age);
         }
+
+        const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query =>
+            query.includes('"people-0"') &&
+            query.includes('INDEXED BY') &&
+            query.includes('ORDER BY')
+        );
+        assert.ok(
+            sqliteQueryUsingExplicitIndex,
+            'Expected logged sqlite query to use explicit index via INDEXED BY'
+        );
 
         await db.close();
     });
