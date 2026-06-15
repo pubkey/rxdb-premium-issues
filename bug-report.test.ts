@@ -171,6 +171,7 @@ describe('bug-report.test.ts', () => {
         const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
 
         const sqliteQueries: string[] = [];
+        const visitedValues = new Set<object>();
         const captureQueries = (value: unknown) => {
             if (!value) {
                 return;
@@ -184,6 +185,10 @@ describe('bug-report.test.ts', () => {
                 return;
             }
             if (typeof value === 'object') {
+                if (visitedValues.has(value)) {
+                    return;
+                }
+                visitedValues.add(value);
                 const asAny = value as { query?: string };
                 if (typeof asAny.query === 'string') {
                     sqliteQueries.push(asAny.query);
@@ -285,9 +290,9 @@ describe('bug-report.test.ts', () => {
         }
 
         const sqliteQueryUsingExplicitIndex = sqliteQueries.find(query =>
-            query.includes('"people-0"') &&
-            query.includes('INDEXED BY') &&
-            query.includes('ORDER BY')
+            /"\s*people-0\s*"/.test(query) &&
+            /\bINDEXED\s+BY\b/.test(query) &&
+            /\bORDER\s+BY\b/.test(query)
         );
         assert.ok(
             sqliteQueryUsingExplicitIndex,
