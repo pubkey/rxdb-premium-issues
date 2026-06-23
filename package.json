@@ -46,6 +46,7 @@
     "webpack": "5.99.0"
   },
   "devDependencies": {
+    "fake-indexeddb": "6.2.5",
     "karma-mocha": "2.0.1",
     "mocha": "11.1.0"
   }
