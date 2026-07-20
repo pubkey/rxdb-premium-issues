@@ -31,6 +31,13 @@ import {
 */
 import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
 
+type PersonDoc = {
+    id: string;
+    name: string;
+    age: number;
+};
+const QUERY_TIMEOUT_MS = 10 * 1000;
+
 describe('bug-report.test.ts', () => {
 
     addRxPlugin(RxDBDevModePlugin);
@@ -152,5 +159,142 @@ describe('bug-report.test.ts', () => {
         sub.unsubscribe();
         db.close();
         dbInOtherTab.close();
+    });
+
+    it('issue #8631: sqlite $in query should work with explicit index + sort', async function () {
+        if (!isNode) {
+            return;
+        }
+
+        // Keep this dynamic require so browser bundling never resolves node:sqlite.
+        const { DatabaseSync } = require('node:sqlite');
+        const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
+
+        const sqliteQueries: string[] = [];
+        const captureQueries = (value: unknown, visitedValues = new Set<object>()) => {
+            if (value === null || value === undefined) {
+                return;
+            }
+            if (typeof value === 'string') {
+                sqliteQueries.push(value);
+                return;
+            }
+            if (Array.isArray(value)) {
+                value.forEach(innerValue => captureQueries(innerValue, visitedValues));
+                return;
+            }
+            if (typeof value === 'object') {
+                if (visitedValues.has(value)) {
+                    return;
+                }
+                visitedValues.add(value);
+                const asAny = value as { query?: string };
+                if (typeof asAny.query === 'string') {
+                    sqliteQueries.push(asAny.query);
+                }
+                Object.values(value).forEach(innerValue => captureQueries(innerValue, visitedValues));
+            }
+        };
+
+        let storage = getRxStorageSQLite({
+            sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync),
+            log: (...args: unknown[]) => args.forEach(captureQueries)
+        });
+        storage = wrappedValidateAjvStorage({
+            storage
+        });
+
+        const db = await createRxDatabase({
+            name: randomToken(10),
+            storage,
+            eventReduce: true,
+            ignoreDuplicate: true
+        });
+
+        const schema = {
+            version: 0,
+            type: 'object',
+            primaryKey: 'id',
+            properties: {
+                id: {
+                    type: 'string',
+                    maxLength: 100
+                },
+                name: {
+                    type: 'string',
+                    maxLength: 100
+                },
+                age: {
+                    type: 'integer',
+                    minimum: 0,
+                    maximum: 200,
+                    multipleOf: 1
+                }
+            },
+            required: ['id', 'name', 'age'],
+            indexes: [
+                ['name', 'age']
+            ]
+        };
+
+        const collections = await db.addCollections({
+            people: {
+                schema
+            }
+        });
+        const collection = collections.people;
+
+        const names = ['aaron', 'jack', 'carol', 'zoe'];
+        const docs: PersonDoc[] = Array.from({ length: 15000 }, (_, idx) => ({
+            id: 'id-' + idx,
+            name: names[idx % names.length],
+            age: idx % 100
+        }));
+        await collection.bulkInsert(docs);
+
+        const rxQuery = collection.find({
+            selector: {
+                name: {
+                    $in: ['aaron', 'jack', 'carol']
+                },
+                age: {
+                    $lt: 5
+                }
+            },
+            sort: [{ age: 'desc' }],
+            limit: 50,
+            index: ['name', 'age']
+        });
+        const queryPromise = rxQuery.exec();
+
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise: Promise<never> = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('issue #8631 regression: query timed out')), QUERY_TIMEOUT_MS);
+        });
+
+        let result: PersonDoc[];
+        try {
+            result = await Promise.race([queryPromise, timeoutPromise]);
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        }
+        assert.strictEqual(result.length, 50);
+        result.forEach(doc => {
+            assert.ok(['aaron', 'jack', 'carol'].includes(doc.name));
+            assert.ok(doc.age < 5);
+        });
+        for (let i = 1; i < result.length; i++) {
+            assert.ok(result[i - 1].age >= result[i].age);
+        }
+
+        const explicitIndexQuery = sqliteQueries.find(query => /(?=.*\bpeople-0\b)(?=.*\bINDEXED\s+BY\b)(?=.*\bORDER\s+BY\b)/s.test(query));
+        assert.ok(
+            explicitIndexQuery,
+            'Expected logged sqlite query to use explicit index via INDEXED BY'
+        );
+
+        await db.close();
     });
 });
