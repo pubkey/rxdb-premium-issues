@@ -1,156 +1,99 @@
-/**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
- *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
- */
-import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
+import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
     createRxDatabase,
-    randomToken,
-    addRxPlugin
+    randomToken
 } from 'rxdb/plugins/core';
-
-import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
-import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
-import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
-
+import { replicateRxCollection } from 'rxdb/plugins/replication';
 import {
-    isNode
-} from 'rxdb/plugins/test-utils';
-
-
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
+    getRxStorageSQLite,
+    getSQLiteBasicsNodeNative
+} from 'rxdb-premium/plugins/storage-sqlite';
 
 describe('bug-report.test.ts', () => {
-
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
-
-    it('should fail because it reproduces the bug', async function () {
-
-
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
+    it('poisons later SQLite writes when cancellation closes replication metadata mid-write', async () => {
+        const db = await createRxDatabase({
+            name: join(tmpdir(), randomToken(10)),
+            storage: getRxStorageSQLite({
                 sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
-        }
-        storage = wrappedValidateAjvStorage({
-            storage
+            })
         });
-
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
+        const { documents } = await db.addCollections({
+            documents: {
+                schema: {
+                    version: 0,
+                    primaryKey: 'id',
+                    type: 'object',
+                    properties: {
+                        id: {
+                            type: 'string',
+                            maxLength: 100
+                        }
+                    }
                 }
             }
+        });
+
+        let downstreamWriteCompleted!: () => void;
+        const downstreamWriteCompletion = new Promise<void>(resolve => {
+            downstreamWriteCompleted = resolve;
+        });
+        let releaseDownstreamWrite!: () => void;
+        const downstreamWriteRelease = new Promise<void>(resolve => {
+            releaseDownstreamWrite = resolve;
+        });
+
+        const storageInstance: any = documents.storageInstance;
+        const bulkWrite = storageInstance.bulkWrite.bind(storageInstance);
+        storageInstance.bulkWrite = async (...args: any[]) => {
+            const result = await bulkWrite(...args);
+            downstreamWriteCompleted();
+            await downstreamWriteRelease;
+            return result;
         };
 
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
-        const name = randomToken(10);
-
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
+        const replication = replicateRxCollection({
+            collection: documents,
+            replicationIdentifier: 'closed-meta-reproduction',
+            live: true,
+            autoStart: false,
+            pull: {
+                async handler() {
+                    return {
+                        documents: [
+                            {
+                                id: 'replicated-document',
+                                _deleted: false
+                            }
+                        ],
+                        checkpoint: 1
+                    };
+                },
+                batchSize: 10
+            },
+            push: {
+                async handler() {
+                    return [];
+                },
+                batchSize: 10
             }
         });
 
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
+        await replication.start();
+        await downstreamWriteCompletion;
+
+        const downstreamQueue = (replication as any).internalReplicationState.streamQueue.down;
+        await replication.cancel();
+        releaseDownstreamWrite();
+
+        // The replication metadata write fails here and poisons SQLite's transaction queue.
+        await downstreamQueue.catch(() => { });
+
+        // An unrelated insert surfaces the earlier replication metadata error.
+        await documents.insert({
+            id: 'unrelated-local-document'
         });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
     });
 });
