@@ -1,156 +1,80 @@
 /**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
+ * Bug: after a crash, a filesystem-node database whose last write batch
+ * contained two updates can no longer be opened - the read never resolves
+ * and "SyntaxError: Expected ',' or ']' after array element" is thrown
+ * (unhandled) inside the storage while it reads changes.json.
  *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
+ * Node only ('npm run test:node').
  */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
+import { isNode } from 'rxdb/plugins/test-utils';
 
-import {
-    createRxDatabase,
-    randomToken,
-    addRxPlugin
-} from 'rxdb/plugins/core';
+const schema = {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+        id: { type: 'string', maxLength: 20 },
+        text: { type: 'string' }
+    },
+    required: ['id', 'text']
+};
 
-import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
-import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
-import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
+async function openDatabase(basePath: string) {
+    const { createRxDatabase } = await import('rxdb/plugins/core');
+    const { getRxStorageFilesystemNode } = await import('rxdb-premium/plugins/storage-filesystem-node');
+    const db = await createRxDatabase({ name: 'crash', storage: getRxStorageFilesystemNode({ basePath }) });
+    const { docs } = await db.addCollections({ docs: { schema } });
+    return { db, docs };
+}
 
-import {
-    isNode
-} from 'rxdb/plugins/test-utils';
+// child process: insert two docs, update both in one batch, then crash
+async function writeThenCrash(basePath: string) {
+    const { docs } = await openDatabase(basePath);
+    const [a, b] = await Promise.all([
+        docs.insert({ id: 'a', text: 'a' }),
+        docs.insert({ id: 'b', text: 'b' })
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await Promise.all([
+        a.incrementalPatch({ text: 'x'.repeat(500) }),
+        b.incrementalPatch({ text: 'y' })
+    ]);
+    process.kill(process.pid, 'SIGKILL');
+}
 
-
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-
-describe('bug-report.test.ts', () => {
-
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
-
-    it('should fail because it reproduces the bug', async function () {
-
-
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
-        }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
-
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
+if (process.env.CRASH_BASE_PATH) {
+    writeThenCrash(process.env.CRASH_BASE_PATH);
+} else {
+    describe('bug-report.test.ts', () => {
+        it('should fail because it reproduces the bug', async function () {
+            if (!isNode) {
+                return;
             }
-        };
+            const { mkdtemp, rm } = await import('node:fs/promises' + '');
+            const { tmpdir } = await import('node:os' + '');
+            const { join } = await import('node:path' + '');
+            const { fork } = await import('node:child_process' + '');
 
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
-        const name = randomToken(10);
+            const basePath = await mkdtemp(join(tmpdir(), 'rxdb-'));
+            try {
+                const child = fork(this.test!.file!, [], {
+                    env: { ...process.env, CRASH_BASE_PATH: basePath },
+                    execArgv: ['--import=tsx']
+                });
+                await new Promise((resolve) => child.on('exit', resolve));
 
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
+                const { db, docs } = await openDatabase(basePath);
+                const doc = await Promise.race([
+                    docs.findOne('b').exec(),
+                    new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+                ]);
+                assert.ok(doc, 'database cannot be read after the crash');
+                assert.strictEqual(doc!.text, 'y');
+                await db.close();
+            } finally {
+                await rm(basePath, { recursive: true, force: true });
             }
         });
-
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
     });
-});
+}
