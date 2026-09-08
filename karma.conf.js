@@ -100,6 +100,10 @@ module.exports = function (config) {
         ],
 
         // Exit after running tests once
-        singleRun: true
+        singleRun: true,
+
+        // The bug-report test currently only runs in Node.js, so the browser
+        // run legitimately ends up with an empty (skipped) suite.
+        failOnEmptyTestSuite: false
     });
 };
