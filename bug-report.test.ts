@@ -1,156 +1,189 @@
 /**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
+ * Bug: after a schema migration is interrupted, retrying startMigration()
+ * after reopening the database never resolves and exhausts the heap.
  *
- * To run this test do:
- * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
+ * Node only: npm run test:node
  */
-import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
-
+import assert from 'node:assert';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
+    addRxPlugin,
     createRxDatabase,
-    randomToken,
-    addRxPlugin
+    randomToken
 } from 'rxdb/plugins/core';
-
-import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
-import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
-import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
-
+import { RxDBMigrationSchemaPlugin } from 'rxdb/plugins/migration-schema';
 import {
-    isNode
-} from 'rxdb/plugins/test-utils';
+    getRxStorageSQLite,
+    getSQLiteBasicsNodeNative
+} from 'rxdb-premium/plugins/storage-sqlite';
+import { filter, firstValueFrom } from 'rxjs';
 
+const CHILD_PROCESS_ENV = 'RXDB_INTERRUPTED_MIGRATION_CHILD';
 
-/**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
+const schemaV0 = {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+        id: { type: 'string', maxLength: 100 },
+        value: { type: 'string' }
+    },
+    required: ['id', 'value']
+};
 
-describe('bug-report.test.ts', () => {
+const schemaV1 = {
+    ...schemaV0,
+    version: 1,
+    properties: {
+        ...schemaV0.properties,
+        added: { type: 'boolean' }
+    }
+};
 
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
+const migrationStrategies = {
+    1: (document: Record<string, unknown>) => document
+};
 
-    it('should fail because it reproduces the bug', async function () {
+async function runInterruptedMigrationProbe(): Promise<void> {
+    addRxPlugin(RxDBMigrationSchemaPlugin);
 
-
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
-        }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
-
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
-            }
-        };
-
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
-        const name = randomToken(10);
-
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
+    const name = process.env.RXDB_INTERRUPTED_MIGRATION_DB
+        || join(tmpdir(), 'interrupted-migration-' + randomToken(10));
+    const storage = getRxStorageSQLite({
+        sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
     });
-});
+    const collectionConfig = {
+        schema: schemaV1,
+        autoMigrate: false,
+        migrationStrategies
+    };
+
+    const original = await createRxDatabase({
+        name,
+        storage,
+        multiInstance: false
+    });
+    const originalCollections = await original.addCollections({
+        items: { schema: schemaV0 }
+    });
+    await originalCollections.items.bulkInsert(
+        Array.from({ length: 25 }, (_, index) => ({
+            id: 'item-' + index,
+            value: String(index)
+        }))
+    );
+    await original.close();
+
+    const interrupted = await createRxDatabase({
+        name,
+        storage,
+        multiInstance: false
+    });
+    const interruptedCollections = await interrupted.addCollections({
+        items: collectionConfig
+    });
+    const interruptedState = interruptedCollections.items.getMigrationState();
+    void interruptedState.startMigration(1).catch(() => undefined);
+    const interruptedStatus = await firstValueFrom(
+        interruptedState.$.pipe(filter(status => status.count.handled > 0))
+    );
+    process.stdout.write('INTERRUPTED_AFTER=' + interruptedStatus.count.handled + '\n');
+    await interruptedState.cancel();
+    await interrupted.close();
+
+    const resumed = await createRxDatabase({
+        name,
+        storage,
+        multiInstance: false
+    });
+    const resumedCollections = await resumed.addCollections({
+        items: collectionConfig
+    });
+
+    process.stdout.write('RESUME_STARTED\n');
+    await resumedCollections.items.getMigrationState().startMigration(1);
+    process.stdout.write('RESUME_FINISHED\n');
+    await resumed.close();
+}
+
+if (process.env[CHILD_PROCESS_ENV] === '1') {
+    runInterruptedMigrationProbe().then(
+        () => process.exit(0),
+        error => {
+            console.error(error);
+            process.exit(1);
+        }
+    );
+} else {
+    describe('interrupted schema migration', () => {
+        it('should resume after the database is reopened', async function () {
+            this.timeout(30_000);
+
+            const workingDirectory = await mkdtemp(
+                join(tmpdir(), 'rxdb-interrupted-migration-')
+            );
+            const child = spawn(
+                process.execPath,
+                [
+                    '--max-old-space-size=96',
+                    '--import=tsx',
+                    join(process.cwd(), 'bug-report.test.ts')
+                ],
+                {
+                    cwd: process.cwd(),
+                    env: {
+                        ...process.env,
+                        [CHILD_PROCESS_ENV]: '1',
+                        RXDB_INTERRUPTED_MIGRATION_DB: join(
+                            workingDirectory,
+                            'interrupted-migration-' + randomToken(10)
+                        )
+                    },
+                    stdio: ['ignore', 'pipe', 'pipe']
+                }
+            );
+            let stdout = '';
+            let stderr = '';
+            child.stdout.on('data', chunk => {
+                stdout += chunk.toString();
+            });
+            child.stderr.on('data', chunk => {
+                stderr += chunk.toString();
+            });
+
+            let killedByDeadline = false;
+            const deadline = setTimeout(() => {
+                killedByDeadline = true;
+                child.kill('SIGKILL');
+            }, 10_000);
+            const outcome = await new Promise<{
+                code: number | null;
+                signal: NodeJS.Signals | null;
+            }>(resolve => {
+                child.once('exit', (code, signal) => {
+                    clearTimeout(deadline);
+                    resolve({ code, signal });
+                });
+            });
+            await rm(workingDirectory, { recursive: true, force: true });
+
+            assert.match(stdout, /INTERRUPTED_AFTER=[1-9]/);
+            assert.match(stdout, /RESUME_STARTED/);
+            assert.match(
+                stdout,
+                /RESUME_FINISHED/,
+                'startMigration() did not resume.\n' +
+                    'killedByDeadline=' + killedByDeadline + '\n' +
+                    'exitCode=' + outcome.code + '\n' +
+                    'signal=' + outcome.signal + '\n' +
+                    'stdout:\n' + stdout + '\n' +
+                    'stderr:\n' + stderr
+            );
+            assert.strictEqual(outcome.code, 0);
+        });
+    });
+}
