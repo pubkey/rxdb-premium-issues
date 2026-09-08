@@ -1,21 +1,14 @@
 /**
- * OPFS (sync-access-handle) storage: the database randomly becomes corrupt and
- * can no longer be opened, failing with an error like:
+ * filesystem-node storage: the database randomly becomes corrupt and can no
+ * longer be opened, failing with an error like:
  *
- *   SyntaxError: Expected ',' or ']' after array element in JSON at position 456
+ *   SyntaxError: Expected ',' or ']' after array element in JSON at position 525
  *
  * ---------------------------------------------------------------------------
  * ROOT CAUSE
  * ---------------------------------------------------------------------------
- * The bug is NOT in the OPFS bindings, it is in the shared storage layer
- * `rxdb-premium/plugins/storage-abstract-filesystem` which OPFS, OPFS-main-thread,
- * filesystem-node and filesystem-expo all build on. Therefore it can be reproduced
- * with any AbstractFilesystem implementation (this test uses a minimal in-memory
- * one so that it runs in Node.js AND in the browser; it was also verified against
- * the real `getRxStorageFilesystemNode()`).
- *
- * In `storage-abstract-filesystem/bulk-write.js` -> `bulkWrite()` the serialized
- * event-bulk is appended to `changes.json` like this:
+ * In `rxdb-premium/plugins/storage-abstract-filesystem/bulk-write.js` ->
+ * `bulkWrite()` the serialized event-bulk is appended to `changes.json` like this:
  *
  *   let str = JSON.stringify(categorized.eventBulk);
  *   if (runState.knownChangesFileSize) { str = ',' + str; }
@@ -23,13 +16,15 @@
  *       at: runState.knownChangesFileSize ? runState.knownChangesFileSize : 0
  *   });
  *
- * `runState.knownChangesFileSize` is declared in `TaskQueueRunState` (types.ts) but
- * it is NEVER assigned. So EVERY bulkWrite() of a TaskQueue write-run writes at
- * offset 0 instead of appending at the end of the file.
+ * `runState.knownChangesFileSize` is declared in `TaskQueueRunState` (types.ts)
+ * but it is NEVER assigned - unlike `knownChangelogFileSize` (changelog.js) and
+ * `knownDocumentFileSize` (documents-file.js), which are both kept up to date.
+ * So EVERY bulkWrite() of a TaskQueue write-run writes at offset 0 instead of
+ * appending, and the ',' separator is never prepended.
  *
- * The TaskQueue batches multiple bulkWrite() tasks into a single write-run and it
- * only flushes `changes.json` between two tasks when the second task writes >= 20
- * documents or touches a document that was already touched in the same run
+ * The TaskQueue batches multiple bulkWrite() tasks into a single write-run and
+ * only flushes `changes.json` between two tasks when the second task writes
+ * >= 20 documents or touches a document that was already touched in the same run
  * (see task-queue.js -> triggerWriteTasks()). So two small, independent writes -
  * for example `await Promise.all([docA.patch(...), docB.patch(...)])` - end up in
  * the same run and both write at offset 0:
@@ -37,10 +32,10 @@
  *   WRITE changes.json at=0 len=954  sizeBefore=0     <- bulk A
  *   WRITE changes.json at=0 len=455  sizeBefore=954   <- bulk B overwrites the head of A
  *
- * `changes.json` now contains `<bulk B><tail of bulk A>` and
- * `JSON.parse('[' + content + ']')` - which is exactly what
- * `processChangesFileIfRequired()` does when it reads that file - throws
- * "Expected ',' or ']' after array element in JSON at position <len of bulk B>".
+ * Writing at an offset never truncates, so `changes.json` now contains
+ * `<bulk B><tail of bulk A>` and `JSON.parse('[' + content + ']')` - which is
+ * exactly what `processChangesFileIfRequired()` does when it reads that file -
+ * throws "Expected ',' or ']' after array element in JSON at position <len of bulk B>".
  *
  * During normal operation this stays invisible, because the end-of-run flush
  * prefers the in-memory `runState.knownChangesContent` over the file content and
@@ -49,16 +44,19 @@
  * 15k documents: `changes.json` on disk was invalid JSON after 629 of 963 writes
  * (65% of the time).
  *
- * So whenever the tab / worker goes away before the run finished its final flush
- * (tab closed, reload, browser crash, OOM, worker terminated, or any error inside
- * the run - the TaskQueue promise chain dies on the first rejection), the corrupt
- * `changes.json` survives on disk. On the next start the very first read or write
- * calls `processChangesFileIfRequired()`, the JSON.parse throws and the database is
- * permanently unusable - which matches the customer report:
- *   - happens randomly, during normal usage, independent of migrations
- *   - more likely on filled up databases, because a bigger database makes the
- *     flush slower, so more write tasks are batched into a single run and the
- *     window in which the broken file is on disk gets much bigger
+ * So whenever the process goes away before the run finished its final flush
+ * (tab closed, reload, crash, OOM, worker terminated, or any error inside the
+ * run - the TaskQueue promise chain dies on the first rejection), the corrupt
+ * `changes.json` survives on disk. On the next start the very first read or
+ * write calls `processChangesFileIfRequired()`, the JSON.parse throws and the
+ * database is permanently unusable - it happens randomly, during normal usage,
+ * independent of migrations, and it gets more likely the fuller the database is,
+ * because a bigger database makes the flush slower, so more write tasks are
+ * batched into a single run and the window in which the broken file is on disk
+ * gets much bigger.
+ *
+ * The offending code lives in the shared `storage-abstract-filesystem` layer, so
+ * every storage built on it is affected the same way.
  *
  * ---------------------------------------------------------------------------
  * SUGGESTED FIX
@@ -76,7 +74,6 @@
  *
  * To run this test do:
  * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
  */
 import assert from 'assert';
 
@@ -91,136 +88,18 @@ import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
 import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
 
-import { getRxStorageAbstractFilesystem } from 'rxdb-premium/plugins/storage-abstract-filesystem';
-
-
-/**
- * A minimal in-memory AbstractFilesystem that behaves like the OPFS
- * FileSystemSyncAccessHandle bindings in
- * rxdb-premium/plugins/storage-opfs/worker-filesystem.js:
- * - write(data, {at}) writes the bytes at the given offset and grows the file
- * - read(from, to) returns exactly (to - from) bytes, zero-filled behind EOF
- * - truncate(len) / getSize()
- * Because everything is stored as plain bytes we can take a snapshot of the
- * "disk" at any point in time and later reopen a database on exactly those bytes.
- */
-type FileMap = Map<string, Uint8Array>;
-
-function snapshotFiles(files: FileMap): FileMap {
-    const ret: FileMap = new Map();
-    Array.from(files.entries()).forEach(entry => {
-        ret.set(entry[0], new Uint8Array(entry[1]));
-    });
-    return ret;
-}
-
-class MemoryWritable {
-    constructor(
-        public files: FileMap,
-        public path: string,
-        public onWrite: (path: string) => void
-    ) { }
-    write(data: Uint8Array, options: { at: number; }) {
-        const before = this.files.get(this.path) as Uint8Array;
-        const next = new Uint8Array(Math.max(before.byteLength, options.at + data.byteLength));
-        next.set(before, 0);
-        next.set(data, options.at);
-        this.files.set(this.path, next);
-        this.onWrite(this.path);
-    }
-    close() { }
-}
-
-class MemoryAccessHandle {
-    constructor(
-        public files: FileMap,
-        public path: string,
-        public onWrite: (path: string) => void
-    ) { }
-    read(from: number, to?: number) {
-        const content = this.files.get(this.path) as Uint8Array;
-        const end = typeof to === 'number' ? to : content.byteLength;
-        const ret = new Uint8Array(Math.max(0, end - from));
-        ret.set(content.subarray(from, Math.min(end, content.byteLength)));
-        return ret;
-    }
-    getWritable() {
-        return new MemoryWritable(this.files, this.path, this.onWrite);
-    }
-    truncate(len: number) {
-        const content = this.files.get(this.path) as Uint8Array;
-        const next = new Uint8Array(len);
-        next.set(content.subarray(0, Math.min(len, content.byteLength)));
-        this.files.set(this.path, next);
-        this.onWrite(this.path);
-    }
-    getSize() {
-        return (this.files.get(this.path) as Uint8Array).byteLength;
-    }
-    close() { }
-}
-
-class MemoryFileHandle {
-    constructor(
-        public files: FileMap,
-        public path: string,
-        public name: string,
-        public onWrite: (path: string) => void
-    ) { }
-    async createAccessHandle() {
-        return new MemoryAccessHandle(this.files, this.path, this.onWrite);
-    }
-}
-
-class MemoryDirectory {
-    constructor(
-        public files: FileMap,
-        public path: string,
-        public onWrite: (path: string) => void
-    ) { }
-    async getDirectoryHandle(name: string) {
-        return new MemoryDirectory(this.files, this.path + name + '/', this.onWrite);
-    }
-    async getFileHandle(filename: string, options: { create: boolean; }) {
-        const fullPath = this.path + filename;
-        if (!this.files.has(fullPath)) {
-            if (!options.create) {
-                throw new Error('file does not exist ' + fullPath);
-            }
-            this.files.set(fullPath, new Uint8Array(0));
-        }
-        return new MemoryFileHandle(this.files, fullPath, filename, this.onWrite);
-    }
-    async removeEntry(filename: string) {
-        this.files.delete(this.path + filename);
-    }
-}
-
-class MemoryFilesystem {
-    constructor(
-        public files: FileMap,
-        public onWrite: (path: string) => void = () => { }
-    ) { }
-    async getDirectory() {
-        return new MemoryDirectory(this.files, '/', this.onWrite);
-    }
-}
+import {
+    isNode
+} from 'rxdb/plugins/test-utils';
 
 /**
- * Same semantic as navigator.locks / the web-locks package:
- * only one task per lockId at the same time.
+ * Node.js-only modules. In the browser bundle these resolve to empty stubs
+ * (see the `fallback` config in karma.conf.js) and the test skips itself.
  */
-function createMemoryLock() {
-    const queues: Map<string, Promise<any>> = new Map();
-    return {
-        request(lockId: string, fn: () => Promise<any>) {
-            const before = queues.get(lockId) || Promise.resolve();
-            const run = before.then(() => fn());
-            queues.set(lockId, run.catch(() => { }));
-            return run;
-        }
-    };
-}
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 
 const mySchema = {
     version: 0,
@@ -246,8 +125,6 @@ const mySchema = {
     required: ['passportId']
 };
 
-const textDecoder = new TextDecoder();
-
 describe('bug-report.test.ts', () => {
 
     addRxPlugin(RxDBDevModePlugin);
@@ -256,39 +133,40 @@ describe('bug-report.test.ts', () => {
     it('should fail because it reproduces the bug', async function () {
         this.timeout(20000);
 
-        const databaseName = randomToken(10);
+        if (!isNode) {
+            /**
+             * The filesystem-node storage only exists in Node.js.
+             * Run this with 'npm run test:node'.
+             */
+            this.skip();
+            return;
+        }
 
         /**
-         * The "disk". Every time the storage writes something, we remember the
-         * full byte state of all files. Each of these snapshots is a state that
-         * really existed on disk, so each of them is a state that a browser tab
-         * can be closed in.
+         * Loaded lazily so that the browser bundle does not try to resolve the
+         * Node.js-only dependencies of the filesystem-node storage.
          */
-        const files: FileMap = new Map();
-        const diskStates: FileMap[] = [];
-        const storage = wrappedValidateAjvStorage({
-            storage: getRxStorageAbstractFilesystem({
-                name: 'in-memory-test-filesystem',
-                abstractFilesystem: new MemoryFilesystem(files, () => {
-                    diskStates.push(snapshotFiles(files));
-                }) as any,
-                abstractLock: createMemoryLock() as any,
-                inWorker: false
-            })
-        });
+        const storageModule = 'rxdb-premium/plugins/storage-filesystem-node';
+        const { getRxStorageFilesystemNode } = await import(/* webpackIgnore: true */ storageModule);
+
+        const basePath = fs.mkdtempSync(path.join(os.tmpdir(), 'rxdb-filesystem-node-'));
+        const databaseName = randomToken(10);
+        const collectionName = 'mycollection';
 
         const db = await createRxDatabase({
             name: databaseName,
-            storage,
+            storage: wrappedValidateAjvStorage({
+                storage: getRxStorageFilesystemNode({ basePath })
+            }),
             eventReduce: true,
             ignoreDuplicate: true
         });
         const collections = await db.addCollections({
-            mycollection: {
+            [collectionName]: {
                 schema: mySchema as any
             }
         });
-        const collection: RxCollection<any> = collections.mycollection;
+        const collection: RxCollection<any> = collections[collectionName];
 
         await collection.bulkInsert(
             new Array(20).fill(0).map((_v, idx) => ({
@@ -312,86 +190,100 @@ describe('bug-report.test.ts', () => {
             docB.patch({ lastName: 'y' })
         ]);
 
-        const changesFilePath = Array.from(files.keys())
-            .filter(path => path.indexOf('-mycollection-') !== -1)
-            .filter(path => path.indexOf('changes.json') !== -1)[0];
+        /**
+         * Simulate the process going away while the write-run is still open,
+         * by copying the database files exactly as they are on disk right now.
+         *
+         * Everything in this block is synchronous on purpose: after the last
+         * write task resolved, the write-run waits 10ms for further tasks before
+         * it does its final flush + truncate(0), so as long as we do not yield to
+         * the event loop we copy exactly the bytes that a killed process would
+         * have left behind.
+         */
+        const crashedBasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'rxdb-filesystem-node-crashed-'));
+        fs.cpSync(basePath, crashedBasePath, { recursive: true });
 
         /**
-         * The content of changes.json is read back with
-         * JSON.parse('[' + content + ']') by processChangesFileIfRequired().
-         * So on every state that ever existed on disk, that must be parseable.
+         * Let the original database finish normally so that it releases its
+         * web-locks. It only touches its own files in basePath, the copy we
+         * took above is not affected by this.
          */
-        function getChangesFileParseError(diskState: FileMap): Error | undefined {
-            const content = textDecoder.decode(diskState.get(changesFilePath) as Uint8Array);
-            if (content.length === 0) {
-                return undefined;
-            }
-            try {
-                JSON.parse('[' + content + ']');
-                return undefined;
-            } catch (err) {
-                return err as Error;
-            }
-        }
+        await db.close();
 
-        const brokenDiskStateIndex = diskStates.findIndex(diskState => !!getChangesFileParseError(diskState));
+        const changesFilePath = path.join(
+            crashedBasePath,
+            'rxdb-' + databaseName + '-' + collectionName + '-0',
+            'changes.json'
+        );
+        const changesFileContent = fs.readFileSync(changesFilePath, 'utf-8');
 
-        if (brokenDiskStateIndex !== -1) {
-            const brokenDiskState = diskStates[brokenDiskStateIndex];
-            const parseError = getChangesFileParseError(brokenDiskState) as Error;
-            const brokenContent = textDecoder.decode(brokenDiskState.get(changesFilePath) as Uint8Array);
+        /**
+         * processChangesFileIfRequired() reads changes.json back with
+         * JSON.parse('[' + content + ']'), so that must always work.
+         */
+        let changesFileParseError: Error | undefined;
+        try {
+            JSON.parse('[' + changesFileContent + ']');
+        } catch (err) {
+            changesFileParseError = err as Error;
             console.log(
-                'broken changes.json on disk (' + brokenContent.length + ' bytes), ' +
-                'JSON.parse("[" + content + "]") fails with: ' + parseError.message
+                'changes.json on disk (' + changesFileContent.length + ' bytes), ' +
+                'JSON.parse("[" + content + "]") fails with: ' + changesFileParseError.message
             );
             console.log('content around the corruption: ' + JSON.stringify(
-                brokenContent.substring(Math.max(0, brokenContent.length - 60))
+                changesFileContent.substring(Math.max(0, changesFileContent.length - 60))
             ));
-
-            /**
-             * Reopen the database on exactly the bytes that were on disk at that
-             * moment, like a browser tab that was closed and opened again.
-             * The first read triggers processChangesFileIfRequired(), the JSON.parse
-             * throws inside of the TaskQueue promise chain, the queue dies and the
-             * query never resolves -> the database is permanently unusable.
-             */
-            const reopenedDb = await createRxDatabase({
-                name: databaseName,
-                storage: wrappedValidateAjvStorage({
-                    storage: getRxStorageAbstractFilesystem({
-                        name: 'in-memory-test-filesystem',
-                        abstractFilesystem: new MemoryFilesystem(brokenDiskState) as any,
-                        abstractLock: createMemoryLock() as any,
-                        inWorker: false
-                    })
-                }),
-                eventReduce: true,
-                ignoreDuplicate: true
-            });
-            const reopenedCollections = await reopenedDb.addCollections({
-                mycollection: {
-                    schema: mySchema as any
-                }
-            });
-            const readResult = await Promise.race([
-                reopenedCollections.mycollection.find().exec().then(() => 'read-worked'),
-                new Promise<string>(res => setTimeout(() => res('read-never-resolved'), 2000))
-            ]);
-            console.log('reading the reopened database: ' + readResult);
-            assert.strictEqual(
-                readResult,
-                'read-worked',
-                'the database can no longer be read after the write-run was interrupted'
-            );
         }
 
-        assert.strictEqual(
-            brokenDiskStateIndex,
-            -1,
-            'changes.json must always contain valid JSON on disk, but disk state ' +
-            brokenDiskStateIndex + ' of ' + diskStates.length + ' does not'
-        );
+        /**
+         * Reopen the database on exactly the files that were on disk at that
+         * moment, like a process that was killed and started again.
+         * The first read triggers processChangesFileIfRequired(), the JSON.parse
+         * throws inside of the TaskQueue promise chain, the queue dies and the
+         * query never resolves -> the database is permanently unusable.
+         */
+        const reopenedDb = await createRxDatabase({
+            name: databaseName,
+            storage: wrappedValidateAjvStorage({
+                storage: getRxStorageFilesystemNode({ basePath: crashedBasePath })
+            }),
+            eventReduce: true,
+            ignoreDuplicate: true
+        });
+        const reopenedCollections = await reopenedDb.addCollections({
+            [collectionName]: {
+                schema: mySchema as any
+            }
+        });
 
-        await db.close();
+        /**
+         * The TaskQueue swallows the error into its own promise chain, so the
+         * query below never resolves and never rejects. Catch it here to show
+         * what actually killed the database.
+         */
+        const taskQueueErrors: Error[] = [];
+        const onUnhandledRejection = (err: any) => taskQueueErrors.push(err);
+        process.on('unhandledRejection', onUnhandledRejection);
+        const readResult = await Promise.race([
+            reopenedCollections[collectionName].find().exec().then(() => 'read-worked'),
+            new Promise<string>(res => setTimeout(() => res('read-never-resolved'), 3000))
+        ]);
+        process.off('unhandledRejection', onUnhandledRejection);
+
+        console.log('reading the reopened database: ' + readResult);
+        taskQueueErrors.forEach(err => console.log(
+            'the RxStorage task-queue died with: ' + err.message
+        ));
+
+        assert.strictEqual(
+            readResult,
+            'read-worked',
+            'the database can no longer be read after the write-run was interrupted'
+        );
+        assert.strictEqual(
+            changesFileParseError,
+            undefined,
+            'changes.json must always contain valid JSON on disk'
+        );
     });
 });
