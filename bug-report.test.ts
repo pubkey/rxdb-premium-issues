@@ -1,156 +1,142 @@
 /**
- * this is a template for a test.
- * If you found a bug, edit this test to reproduce it
- * and than make a pull-request with that failing test.
- * The maintainer will later move your test to the correct position in the test-suite.
+ * abstract-filesystem storage: a crash during cleanup() duplicates every index
+ * row on the next open. The database opens without any error, but afterwards
+ * every document is returned twice.
+ *
+ * ---------------------------------------------------------------------------
+ * ROOT CAUSE
+ * ---------------------------------------------------------------------------
+ * Writes never touch the index files. `processChangesFileIfRequired()` mutates
+ * the in-memory index rows and APPENDS the resulting operations to
+ * `changelog.txt` (`changelog.js` -> `addChangelogOperations()`). On every open,
+ * `helpers.js` -> `getStorageInstanceInternalState()` loads the index files and
+ * replays the whole changelog on top of them, unconditionally:
+ *
+ *   const [, ops] = await Promise.all([
+ *       Promise.all(indexStates.map(i => i.initRead(runState))),
+ *       changelog.getChangelogOperations(runState)
+ *   ]);
+ *   ops.forEach((opsOfIndex, i) => opsOfIndex.forEach(op => indexStates[i].runChangelogOperation(op)));
+ *
+ * The only place that ever writes the index files and empties the changelog is
+ * `cleanup.js` -> `cleanupChangelogOperations()`, and it does so in two steps
+ * that are not atomic:
+ *
+ *   for (const indexState of indexStatesWithOperations) {
+ *       await indexState.persistInMemoryRows(runState);   // 1. index files now CONTAIN the ops
+ *   }
+ *   await changelog.empty(runState);                       // 2. changelog.txt truncated
+ *
+ * If the process dies between step 1 and step 2 (crash, OOM, tab closed, power
+ * loss), the index files on disk already contain the effect of every operation,
+ * and `changelog.txt` still contains the operations themselves. The next open
+ * loads the baked rows and replays the same operations on top, and
+ * `IndexState.runChangelogOperation()` is purely positional:
+ *
+ *   if ('A' === op[2]) this.rows.splice(op[1], 0, op[3]);
+ *
+ * so every 'A' inserts its row a second time, at the position it had when the
+ * array was shorter. No error is thrown at any point. The collection then
+ * returns every document twice.
+ *
+ * The window is not small: step 1 rewrites one file per index (three for a
+ * schema without custom indexes, more with them), each a full JSON dump of the
+ * rows, which for a large collection is megabytes.
+ *
+ * This is not the changes.json problem from #28: `changelog.txt` is appended
+ * correctly (`knownChangelogFileSize` IS kept up to date). It is the index
+ * files and the changelog disagreeing about which operations are already
+ * applied, and the boot path having no way to tell.
+ *
+ * ---------------------------------------------------------------------------
+ * SUGGESTED FIX
+ * ---------------------------------------------------------------------------
+ * Record which part of the changelog the index files already contain, so the
+ * boot replay can skip it. For example: `cleanupChangelogOperations()` writes
+ * the changelog byte length it is about to bake to a small marker file BEFORE
+ * the first `persistInMemoryRows()`, and `getStorageInstanceInternalState()`
+ * only replays operations past that offset (the marker is removed after
+ * `changelog.empty()`). A crash anywhere in the sequence then leaves a state
+ * the next open can interpret correctly.
  *
  * To run this test do:
  * - 'npm run test:node' so it runs in nodejs
- * - 'npm run test:browser' so it runs in the browser
  */
 import assert from 'assert';
-import AsyncTestUtil from 'async-test-util';
+import { isNode } from 'rxdb/plugins/test-utils';
 
-import {
-    createRxDatabase,
-    randomToken,
-    addRxPlugin
-} from 'rxdb/plugins/core';
+const schema = {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+        id: { type: 'string', maxLength: 20 },
+        text: { type: 'string' }
+    },
+    required: ['id', 'text']
+};
 
-import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
-import { wrappedValidateAjvStorage } from 'rxdb/plugins/validate-ajv';
-import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
+const ids = ['a', 'b', 'c'];
 
-import {
-    isNode
-} from 'rxdb/plugins/test-utils';
-
+async function openDatabase(basePath: string) {
+    const { createRxDatabase, addRxPlugin } = await import('rxdb/plugins/core');
+    const { RxDBCleanupPlugin } = await import('rxdb/plugins/cleanup');
+    const { getRxStorageFilesystemNode } = await import('rxdb-premium/plugins/storage-filesystem-node');
+    addRxPlugin(RxDBCleanupPlugin);
+    const db = await createRxDatabase({ name: 'crash', storage: getRxStorageFilesystemNode({ basePath }) });
+    const { docs } = await db.addCollections({ docs: { schema } });
+    return { db, docs };
+}
 
 /**
- * You can import any RxDB Premium Plugins here
-*/
-import { getRxStorageIndexedDB } from 'rxdb-premium/plugins/storage-indexeddb';
-
-describe('bug-report.test.ts', () => {
-
-    addRxPlugin(RxDBDevModePlugin);
-    addRxPlugin(RxDBQueryBuilderPlugin);
-
-    it('should fail because it reproduces the bug', async function () {
-
-
-        let storage: any;
-        if (isNode) {
-            // SQLite is only available in Node.js; use dynamic require so the browser
-            // bundle never tries to include native Node-only dependencies.
-            const { DatabaseSync } = require('node:sqlite' + '');
-            const { getRxStorageSQLite, getSQLiteBasicsNodeNative } = require('rxdb-premium/plugins/storage-sqlite');
-            storage = getRxStorageSQLite({
-                sqliteBasics: getSQLiteBasicsNodeNative(DatabaseSync)
-            });
-        } else {
-            // In the browser, use the premium IndexedDB storage.
-            storage = getRxStorageIndexedDB();
+ * child process: insert three docs, then run cleanup() and die at the exact
+ * moment cleanup is about to empty changelog.txt - after every index file has
+ * already been rewritten.
+ */
+async function writeThenCrashDuringCleanup(basePath: string) {
+    const { NodeFilesystemFileSyncAccessHandle } = await import('rxdb-premium/plugins/storage-filesystem-node');
+    const truncate = NodeFilesystemFileSyncAccessHandle.prototype.truncate;
+    NodeFilesystemFileSyncAccessHandle.prototype.truncate = function (size: number) {
+        if (this.fileHandle.name === 'changelog.txt') {
+            process.kill(process.pid, 'SIGKILL');
         }
-        storage = wrappedValidateAjvStorage({
-            storage
-        });
+        return truncate.call(this, size);
+    };
 
-        // create a schema
-        const mySchema = {
-            version: 0,
-            primaryKey: 'passportId',
-            type: 'object',
-            properties: {
-                passportId: {
-                    type: 'string',
-                    maxLength: 100
-                },
-                firstName: {
-                    type: 'string'
-                },
-                lastName: {
-                    type: 'string'
-                },
-                age: {
-                    type: 'integer',
-                    minimum: 0,
-                    maximum: 150
-                }
+    const { docs } = await openDatabase(basePath);
+    await docs.bulkInsert(ids.map(id => ({ id, text: id })));
+    await docs.cleanup(0);
+}
+
+if (process.env.CRASH_BASE_PATH) {
+    writeThenCrashDuringCleanup(process.env.CRASH_BASE_PATH);
+} else {
+    describe('bug-report.test.ts', () => {
+        it('should fail because it reproduces the bug', async function () {
+            if (!isNode) {
+                return;
             }
-        };
+            const { mkdtemp, rm } = await import('node:fs/promises' + '');
+            const { tmpdir } = await import('node:os' + '');
+            const { join } = await import('node:path' + '');
+            const { fork } = await import('node:child_process' + '');
 
-        /**
-         * Always generate a random database-name
-         * to ensure that different test runs do not affect each other.
-         */
-        const name = randomToken(10);
+            const basePath = await mkdtemp(join(tmpdir(), 'rxdb-'));
+            try {
+                const child = fork(this.test!.file!, [], {
+                    env: { ...process.env, CRASH_BASE_PATH: basePath },
+                    execArgv: ['--import=tsx']
+                });
+                const signal = await new Promise((resolve) => child.on('exit', (_code, sig) => resolve(sig)));
+                assert.strictEqual(signal, 'SIGKILL', 'the child must die inside cleanup()');
 
-        // create a database
-        const db = await createRxDatabase({
-            name,
-            storage: storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collections = await db.addCollections({
-            mycollection: {
-                schema: mySchema
+                const { db, docs } = await openDatabase(basePath);
+                const found = await docs.find().exec();
+                await db.close();
+                assert.deepStrictEqual(found.map(d => d.id).sort(), ids, 'documents are duplicated after the crash');
+            } finally {
+                await rm(basePath, { recursive: true, force: true });
             }
         });
-
-        // insert a document
-        await collections.mycollection.insert({
-            passportId: 'foobar',
-            firstName: 'Bob',
-            lastName: 'Kelso',
-            age: 56
-        });
-
-        /**
-         * to simulate the event-propagation over multiple browser-tabs,
-         * we create the same database again
-         */
-        const dbInOtherTab = await createRxDatabase({
-            name,
-            storage,
-            eventReduce: true,
-            ignoreDuplicate: true
-        });
-        // create a collection
-        const collectionInOtherTab = await dbInOtherTab.addCollections({
-            mycollection: {
-                schema: mySchema
-            }
-        });
-
-        // find the document in the other tab
-        const myDocument = await collectionInOtherTab.mycollection
-            .findOne()
-            .where('firstName')
-            .eq('Bob')
-            .exec();
-
-        /*
-         * assert things,
-         * here your tests should fail to show that there is a bug
-         */
-        assert.strictEqual(myDocument.age, 56);
-
-
-        // you can also wait for events
-        const emitted: any[] = [];
-        const sub = collectionInOtherTab.mycollection
-            .findOne().$
-            .subscribe(doc => {
-                emitted.push(doc);
-            });
-        await AsyncTestUtil.waitUntil(() => emitted.length === 1);
-
-        // clean up afterwards
-        sub.unsubscribe();
-        db.close();
-        dbInOtherTab.close();
     });
-});
+}
